@@ -1,0 +1,2241 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鉄道運行情報 / 台風情報オーバーレイ</title>
+<style>
+:root{
+  --u:1;
+
+  /* ---- 基本パレット ---- */
+  --bg:#171717;        /* 地                                 */
+  --band:#242424;      /* ヘッダ／地図の台座                 */
+  --fg:#f2f2f2;        /* 文字（純白は眩しいので少し落とす） */
+  --line:#3e3e3e;      /* 罫線・境界                         */
+  --dim:#525252;       /* 発表なしの区域                     */
+
+  --panel:var(--band);
+  --sub:#9a9a9a;
+
+  --danger:#ff5a54;
+  --warn:#ffc93c;
+  --ok:#4fd18b;
+  --info:#5aa9ff;
+  --typhoon:#ff6b63;
+  --gale:#ffd24d;
+
+  /* ---- 地図エリア（ダーク＝既定） ---- */
+  --map-bg:var(--bg);        /* 海         */
+  --map-land:var(--band);    /* 陸（台座） */
+  --map-coast:var(--line);   /* 海岸線     */
+  --map-rail:var(--dim);     /* 通常の路線 */
+  --map-node:var(--band);    /* 駅マーク（線を切る色） */
+  --map-label:var(--fg);
+  --map-labelbg:rgba(36,36,36,.94);
+  --map-labelbd:var(--line);
+  --map-cont:var(--line);    /* 大陸 */
+  --map-contfill:#1e1e1e;
+  --map-track:rgba(242,242,242,.8);  /* 台風の進路・予報円 */
+  --map-base:#343434;                /* 全国の幹線ネットワーク */
+}
+/* 地図エリアだけ白地の路線図風にするとき */
+html:not(.map-dark){
+  --map-bg:#dfe4ea;
+  --map-land:#ffffff;
+  --map-coast:#9fabb8;
+  --map-rail:#c4cad1;
+  --map-node:#ffffff;
+  --map-label:#15181c;
+  --map-labelbg:rgba(255,255,255,.94);
+  --map-labelbd:rgba(0,0,0,.20);
+  --map-cont:#b9c3cf;
+  --map-contfill:#f4f6f8;
+  --map-track:#3a4149;
+  --map-base:#aab4bf;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg)}
+body{font-family:"Noto Sans JP","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;
+  color:var(--fg);-webkit-font-smoothing:antialiased}
+
+#stage{position:absolute;inset:0;display:flex;flex-direction:row}
+#stage.portrait{flex-direction:column}
+#mapWrap{position:relative;flex:1 1 auto;min-width:0;min-height:0;order:2}
+#map{display:block;width:100%;height:100%}
+#panel{position:relative;flex:0 0 auto;order:1;background:var(--panel);
+  display:flex;flex-direction:column;
+  padding:calc(30px*var(--u)) calc(24px*var(--u)) calc(24px*var(--u))
+          calc(12px*var(--u) + var(--barw))}
+:root{--barw:calc(22px*var(--u))}
+#panel.nobar{padding-left:calc(24px*var(--u))}
+#edgeBar.hide{display:none}
+#edgeBar{position:absolute;left:0;top:0;bottom:0;width:var(--barw);
+  background:var(--ok);display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-end;
+  padding-bottom:calc(34px*var(--u));gap:calc(3px*var(--u));
+  transition:background .3s ease}
+#edgeBar .n{font-size:calc(24px*var(--u));font-weight:700;line-height:1.05;
+  color:var(--bar-fg,#fff)}
+#edgeBar .sep{width:calc(12px*var(--u));height:calc(2px*var(--u));
+  background:var(--bar-fg,#fff);opacity:.7;margin:calc(2px*var(--u)) 0}
+
+.p-title{font-size:calc(56px*var(--u));font-weight:600;letter-spacing:.04em;line-height:1.1}
+.p-rule{height:calc(5px*var(--u));background:var(--fg);margin:calc(14px*var(--u)) 0 calc(24px*var(--u))}
+
+.card{opacity:1;transition:opacity .3s ease}
+.card.out{opacity:0}
+.card.hide{display:none}
+
+/* ---- 鉄道 ---- */
+.line-row{display:flex;align-items:center;gap:calc(16px*var(--u))}
+.badge{flex:none;width:calc(86px*var(--u));height:calc(86px*var(--u));
+  border-radius:calc(14px*var(--u));display:flex;align-items:center;justify-content:center;
+  font-size:calc(44px*var(--u));font-weight:700;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35)}
+.badge.empty{display:none}
+.badge.icon{background:transparent!important;border-radius:0;padding:0}
+.badge.icon.plate{background:#fff!important;border-radius:calc(12px*var(--u));
+  padding:calc(5px*var(--u))}
+.badge img{width:100%;height:100%;object-fit:contain;display:block}
+.line-name{font-size:calc(86px*var(--u));font-weight:500;line-height:1;white-space:nowrap}
+.line-sub{margin-top:calc(10px*var(--u));text-align:right;
+  font-size:calc(30px*var(--u));color:var(--sub);min-height:calc(34px*var(--u))}
+.status-row{margin-top:calc(26px*var(--u));display:flex;align-items:center;gap:calc(14px*var(--u))}
+.mark{font-size:calc(52px*var(--u));line-height:1;font-weight:700}
+.mark.icon{display:flex;align-items:center;justify-content:center}
+.mark.icon img{height:calc(58px*var(--u));width:auto;display:block}
+.status{font-size:calc(60px*var(--u));font-weight:500;line-height:1.05;white-space:nowrap}
+.st-danger .mark{color:var(--danger)}
+.st-warn   .mark{color:var(--warn)}
+.st-ok     .mark{color:var(--ok)}
+.st-info   .mark{color:var(--info)}
+.resume{margin-top:calc(12px*var(--u));text-align:right;
+  font-size:calc(40px*var(--u));min-height:calc(44px*var(--u))}
+.resume.hide{visibility:hidden}
+.c-rule{height:calc(2px*var(--u));background:var(--line);
+  margin:calc(20px*var(--u)) 0 calc(16px*var(--u))}
+.cause-label{font-size:calc(36px*var(--u));margin-bottom:calc(8px*var(--u))}
+.cause-text{font-size:calc(38px*var(--u));line-height:1.45;color:var(--fg);
+  overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:7}
+
+/* ---- 台風 ---- */
+.ty-no{font-size:calc(76px*var(--u));font-weight:600;line-height:1;white-space:nowrap}
+.ty-name{margin-top:calc(6px*var(--u));font-size:calc(38px*var(--u));color:var(--sub)}
+.ty-grade{margin-top:calc(18px*var(--u));font-size:calc(46px*var(--u));
+  font-weight:600;color:var(--typhoon);line-height:1.15}
+.ty-loc{margin-top:calc(10px*var(--u));font-size:calc(32px*var(--u));color:var(--sub)}
+.ty-tbl{margin-top:calc(18px*var(--u));width:100%;border-collapse:collapse}
+#cardTyphoon,#cardWx{min-height:0;overflow:hidden}
+.ty-tbl td{padding:calc(6px*var(--u)) 0;vertical-align:baseline;
+  border-bottom:1px solid var(--line)}
+.ty-tbl td.k{font-size:calc(26px*var(--u));color:var(--sub);white-space:nowrap;width:40%}
+.ty-tbl td.v{font-size:calc(34px*var(--u));text-align:right;font-weight:500}
+
+.wx-when{font-size:calc(64px*var(--u));font-weight:600;line-height:1.05}
+.wx-date{margin-top:calc(6px*var(--u));font-size:calc(30px*var(--u));color:var(--sub)}
+.wx-elem{margin-top:calc(20px*var(--u));font-size:calc(38px*var(--u));font-weight:600}
+.wx-legend{margin-top:calc(22px*var(--u));display:flex;flex-direction:column;
+  gap:calc(10px*var(--u))}
+.wx-legend .row{display:flex;align-items:center;gap:calc(12px*var(--u));
+  font-size:calc(30px*var(--u))}
+.wx-legend .sw{flex:none;width:calc(46px*var(--u));height:calc(26px*var(--u));
+  border-radius:calc(4px*var(--u));border:1px solid var(--line)}
+
+.footer{margin-top:auto;padding-top:calc(14px*var(--u));
+  font-size:calc(20px*var(--u));color:var(--dim);
+  display:flex;justify-content:space-between;align-items:flex-end;gap:8px}
+.dots{display:flex;gap:calc(7px*var(--u));margin-top:calc(8px*var(--u))}
+.dot{width:calc(9px*var(--u));height:calc(9px*var(--u));border-radius:50%;
+  background:var(--dim)}
+.dot.on{background:var(--fg)}
+.dot.ty{border-radius:2px}
+
+/* ---- 起動時のトークン入力 ---- */
+#login{position:absolute;inset:0;z-index:50;background:rgba(23,23,23,.97);
+  display:flex;align-items:center;justify-content:center;padding:24px}
+#login.hide{display:none}
+.lg-box{width:min(560px,92vw);background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;padding:32px 30px}
+.lg-ttl{font-size:30px;font-weight:600;letter-spacing:.03em}
+.lg-rule{height:3px;background:var(--fg);margin:12px 0 18px}
+.lg-desc{font-size:14px;line-height:1.6;color:var(--sub);margin-bottom:20px}
+.lg-desc a{color:var(--fg)}
+.lg-box label{display:block;font-size:13px;color:var(--sub);margin:14px 0 6px}
+.lg-box input[type=password],.lg-box input[type=text]{width:100%;
+  background:#1c1c1c;border:1px solid var(--line);
+  border-radius:8px;color:var(--fg);font-size:15px;padding:11px 12px;outline:none;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.lg-box input:focus{border-color:var(--sub)}
+.lg-chk{display:flex!important;align-items:center;gap:8px;margin-top:16px!important;
+  font-size:13px;color:var(--sub);cursor:pointer}
+.lg-chk input{accent-color:var(--sub)}
+.lg-btns{display:flex;gap:12px;margin-top:24px}
+.lg-btns button{flex:1;padding:13px 0;border:none;border-radius:8px;cursor:pointer;
+  font-size:16px;font-weight:600;font-family:inherit;background:var(--fg);color:#171717}
+.lg-btns button.ghost{background:transparent;color:var(--sub);
+  border:1px solid var(--line)}
+.lg-note{margin-top:16px;font-size:12px;line-height:1.6;color:var(--dim)}
+.lg-note b{color:var(--warn);font-weight:600}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="panel">
+    <div id="edgeBar"><div class="n" id="barCur">1</div><div class="sep"></div><div class="n" id="barTot">1</div></div>
+    <div class="p-title" id="pTitle">鉄道運行情報</div>
+    <div class="p-rule"></div>
+
+    <!-- 鉄道カード -->
+    <div class="card" id="cardTrain">
+      <div class="line-row">
+        <div class="badge" id="badge">JY</div>
+        <div class="line-name" id="lineName">―</div>
+      </div>
+      <div class="line-sub" id="lineSub"></div>
+      <div class="status-row" id="statusRow">
+        <div class="mark" id="mark"></div>
+        <div class="status" id="status"></div>
+      </div>
+      <div class="resume" id="resume"></div>
+      <div class="c-rule"></div>
+      <div class="cause-label">原因</div>
+      <div class="cause-text" id="causeText"></div>
+    </div>
+
+    <!-- 台風カード -->
+    <div class="card hide" id="cardTyphoon">
+      <div class="ty-no"   id="tyNo">台風―号</div>
+      <div class="ty-name" id="tyName"></div>
+      <div class="ty-grade" id="tyGrade"></div>
+      <div class="ty-loc"  id="tyLoc"></div>
+      <table class="ty-tbl"><tbody id="tyBody"></tbody></table>
+    </div>
+
+    <!-- 天気分布予報カード -->
+    <div class="card hide" id="cardWx">
+      <div class="wx-when" id="wxWhen">―</div>
+      <div class="wx-date" id="wxDate"></div>
+      <div class="wx-elem" id="wxElem">天気</div>
+      <div class="c-rule"></div>
+      <div class="wx-legend" id="wxLegend"></div>
+    </div>
+
+    <div class="footer">
+      <div><div id="src">ODPT</div><div class="dots" id="dots"></div></div>
+      <div id="stamp"></div>
+    </div>
+  </div>
+  <div id="mapWrap"><canvas id="map"></canvas></div>
+</div>
+
+<div id="login" class="hide">
+  <div class="lg-box">
+    <div class="lg-ttl">アクセストークン</div>
+    <div class="lg-rule"></div>
+    <div class="lg-desc">
+      公共交通オープンデータセンターで取得したトークンを入力してください。
+      どちらか片方だけでも動作します。空欄のままデモを見ることもできます。
+    </div>
+
+    <label>通常トークン ― 東京メトロ・都営（api.odpt.org）</label>
+    <input id="lgKey" type="password" placeholder="acl:consumerKey" autocomplete="off" spellcheck="false">
+
+    <label>チャレンジトークン ― JR東日本 / jre-is（api-challenge.odpt.org）</label>
+    <input id="lgCKey" type="password" placeholder="challenge access token" autocomplete="off" spellcheck="false">
+
+    <label class="lg-chk"><input id="lgSave" type="checkbox" checked> この端末に保存する</label>
+
+    <div class="lg-btns">
+      <button id="lgStart">開始</button>
+      <button id="lgDemo" class="ghost">デモで見る</button>
+    </div>
+    <div class="lg-note">
+      保存先はこのブラウザのローカルストレージのみで、外部には送信しません。<br>
+      URLに <b>?key=…&amp;ckey=…</b> を付けて起動すればこの画面を省略できます。<br>
+      起動後に <b>K</b> キーでいつでもこの画面を開けます。
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+ * 鉄道運行情報 → 台風情報 ローテーション表示オーバーレイ
+ * 鉄道: 公共交通オープンデータ ODPT API v4
+ * 台風: 気象庁ホームページ内部JSON (bosai/typhoon)
+ * ======================================================================= */
+
+const CONFIG = {
+  panelRatio: 0.27, panelMin: 240, panelMax: 640,
+  baseUnit: 500,     // --u の基準になるパネル幅
+  baseHeight: 820,   // --u の基準になるウィンドウ高さ（低いウィンドウで自動縮小）
+
+  cameraEase: 0.8,  // 地図移動の追従率（1で即座に移動・小さいほどゆっくり）
+  // 路線ナンバリング画像（HTMLと同じ場所に TrainNum フォルダを置く）
+  icons: {
+    enabled: true,
+    base: 'TrainNum/',
+    ext:  '.png',
+    plate: true,      // 白フチの記号が暗い背景で消えないよう白い台紙を敷く
+  },
+
+  // 天気分布予報（気象庁タイル）
+  weather: {
+    enabled: true,
+    showSec: 12,        // 1コマあたりの表示秒数
+    steps: 3,           // 先の時刻を何コマ回すか
+    refreshMin: 30,     // 時刻一覧の再取得間隔（分）
+    element: 'wm',      // wm=天気 / temp=気温 / r3=3時間降水量 / s3=3時間降雪量
+    opacity: 0.88,
+    minZoom: 3, maxZoom: 8,
+    base: 'https://www.jma.go.jp/bosai/jmatile/data/wdist/',
+    legend: [
+      ['晴れ',       '#FFAA00'],
+      ['くもり',     '#AAAAAA'],
+      ['雨',         '#0041FF'],
+      ['雨または雪', '#B9D3FF'],
+      ['雪',         '#F2F2FF'],
+    ],
+  },
+
+  // 運行状況アイコン（HTMLと同じ場所に置く。無ければ ✕ △ などの文字で代替）
+  statusIcons: {
+    enabled: true,
+    base: '',
+    rules: [
+      [/直通運転中止|区間運休|折り返し運転/, 'delay.png'],
+      [/見合わせ|運転中止|運休|不通/,        'stopped.png'],
+      [/遅延|遅れ/,                          'delay.png'],
+      [/ダイヤ乱れ|運転再開|平常運転|平常どおり/, 'resume.png'],
+    ],
+  },
+
+  rotateSec:  8,     // 鉄道1件あたりの表示秒数
+  refreshSec: 60,    // 鉄道情報の再取得間隔
+  showNormal: false, // 平常運転も出すか
+
+  mapMode: 'auto',   // 'japan' | 'auto'
+  minSpanKm: 17,     // 寄り切ったときに画面幅が示す最小距離（km）
+  baseMinSpanKm: 260,// 幹線ネットワーク側の路線に寄るときの最小距離（km）
+  fitPadding: 0.10,
+  drawRailways: true,
+
+  // 路線図（ルートマップ）風の描き方
+  map: {
+    theme: 'light',        // 'dark' = 全体ダーク / 'light' = 白地の路線図風
+    schematic: true,      // 0/45/90度に整形する
+    nodeTarget: 13,       // 1路線あたりの駅ドットの目安数
+    nodeMinKm: 1.2,       // 駅ドットの最小間隔（km）
+    cornerRadius: 10,     // 角丸の半径（px）
+    casing: true,         // 背景色で縁取りして重なりを分離
+    glow: true,           // 該当路線のハロー
+    haloByStatus: true,   // ハローを運行状況の色にする（遅延=黄 / 見合わせ=赤）
+    ticks: true,          // 駅マークを路線図風の直交ダッシュにする
+    showNodes: true,      // 該当路線の駅マーク
+    showLabels: true,     // 該当路線の駅名
+    showAllNodes: true,   // 該当以外の路線にも駅マーク
+    showAllLabels: false, // 該当以外の路線にも駅名
+    boxedLabels: true,    // 該当路線の駅名をボックス表示にする
+    lineNameChip: true,   // 路線名のチップを終端に置く
+    labelMinWidth: 380,   // この画面幅未満なら駅名を出さない
+    nationalMap: true,    // 全国の幹線ネットワークを背景に描く
+    nationalMaxZoom: 14,  // 日本全体表示の何倍まで背景幹線を出すか
+    coastWidth: 2.8,      // 海岸線の太さ倍率
+    coastFade: false,     // true にすると寄ったとき海岸線を薄くする
+    coastMinAlpha: 0.9,   // coastFade 有効時の下限
+  },
+
+  typhoon: {
+    enabled: true,
+    showSec: 12,          // 台風1件あたりの表示秒数
+    maxCount: 0,          // 0 = 発表中の台風・熱帯低気圧をすべて表示
+    refreshMin: 10,       // 台風情報の再取得間隔（分）
+    showForecast: true,   // 予報円・進路を描く
+    includeJapan: true,   // 日本列島が入るように地図を引く
+    showContinent: true,  // 台風表示中はアジア大陸・周辺島嶼も描く
+  },
+
+  sources: [
+    { endpoint:'https://api.odpt.org/api/v4/', key:'0vdvchokznzjc9y9vvgm7q628753fksbc0p1jy00lmxtj0vm5vo8gt11bszeqkpj',
+      infoOperators:['odpt.Operator:TokyoMetro','odpt.Operator:Toei'],
+      geoOperators :['odpt.Operator:TokyoMetro','odpt.Operator:Toei'] },
+    { endpoint:'https://api-challenge.odpt.org/api/v4/', key:'53ga9dqxyhsyd0hbn5gngafsug6h80q22914uqijeldhdtf3msku2yzaczep0v05',
+      infoOperators:['odpt.Operator:jre-is'],
+      geoOperators :['odpt.Operator:JR-East'] },
+  ],
+};
+
+/* ===== 簡略化した日本の海岸線 [経度, 緯度] ===== */
+const JAPAN = {
+hokkaido:[[141.94,45.52],[142.58,44.95],[143.35,44.35],[144.27,44.02],[144.67,43.92],[145.33,44.35],[145.2,44.02],[145.13,43.66],[145.82,43.38],[144.85,43.05],[144.38,42.98],[143.3,42.28],[143.24,41.92],[142.77,42.17],[141.6,42.63],[140.97,42.32],[140.87,42.47],[140.38,42.51],[140.73,41.77],[140.1,41.42],[140.13,41.87],[139.85,42.45],[140.22,42.8],[140.51,42.98],[140.45,43.38],[141.0,43.19],[141.35,43.25],[141.63,43.94],[141.75,44.88],[141.68,45.42],[141.94,45.52]],
+honshu:[[140.91,41.53],[141.46,41.43],[141.4,41.15],[141.55,40.55],[141.98,39.98],[142.07,39.55],[141.9,39.27],[141.6,38.9],[141.45,38.68],[141.45,38.44],[141.5,38.3],[141.3,38.42],[141.07,38.36],[141.02,38.32],[141.02,38.26],[140.95,38.16],[140.93,38.03],[140.98,37.8],[140.95,36.95],[140.6,36.35],[140.83,35.95],[140.87,35.71],[140.45,35.35],[140.4,35.28],[140.32,35.13],[140.1,34.98],[139.9,34.9],[139.85,34.98],[139.79,35.31],[139.92,35.38],[140.08,35.5],[140.1,35.6],[140.05,35.64],[139.92,35.65],[139.83,35.63],[139.78,35.55],[139.75,35.5],[139.68,35.45],[139.68,35.28],[139.74,35.25],[139.62,35.14],[139.58,35.27],[139.53,35.3],[139.4,35.32],[139.31,35.3],[139.15,35.24],[139.13,35.14],[139.07,35.09],[139.1,34.97],[138.94,34.79],[138.85,34.6],[138.78,34.95],[138.87,35.1],[138.52,35.02],[138.4,34.97],[138.23,34.6],[137.53,34.68],[137.02,34.58],[136.9,34.78],[136.85,35.03],[136.65,34.95],[136.75,34.5],[136.9,34.28],[136.2,33.85],[135.76,33.43],[135.35,33.68],[135.15,34.23],[135.42,34.65],[134.99,34.65],[134.55,34.72],[133.85,34.45],[133.2,34.4],[132.45,34.35],[132.22,34.16],[131.8,34.05],[130.94,33.95],[130.9,34.2],[131.4,34.42],[131.85,34.68],[132.2,35.1],[132.75,35.43],[133.3,35.55],[134.22,35.53],[134.63,35.65],[135.35,35.5],[135.95,35.65],[136.15,36.05],[136.12,36.24],[136.62,36.6],[136.77,36.9],[136.9,37.4],[137.33,37.52],[137.05,37.05],[137.2,36.8],[137.85,37.0],[138.25,37.18],[138.53,37.37],[139.05,37.95],[139.45,38.25],[139.8,38.9],[139.9,39.2],[140.05,39.75],[139.7,39.9],[140.05,39.95],[140.0,40.2],[139.9,40.65],[140.2,40.78],[140.34,41.25],[140.75,41.0],[140.75,40.82],[141.0,41.1],[140.91,41.53]],
+shikoku:[[134.63,34.23],[134.6,34.07],[134.55,33.73],[134.18,33.25],[133.55,33.5],[133.02,32.72],[132.72,32.93],[132.55,33.22],[132.02,33.35],[132.42,33.46],[132.72,33.87],[133.0,34.06],[133.28,33.96],[134.05,34.35],[134.42,34.22],[134.63,34.23]],
+kyushu:[[131.0,33.95],[131.75,33.6],[131.9,32.95],[131.68,32.58],[131.65,32.42],[131.45,31.9],[131.35,31.37],[131.1,31.48],[130.95,31.2],[130.66,30.99],[130.62,31.2],[130.3,31.27],[130.25,31.72],[130.19,32.02],[130.4,32.21],[130.6,32.5],[130.55,32.6],[130.35,32.78],[129.87,32.75],[129.72,33.16],[129.55,33.37],[129.97,33.45],[130.4,33.6],[130.53,33.85],[131.0,33.95]],
+okinawa:[[128.27,26.87],[128.1,26.6],[127.75,26.35],[127.65,26.2],[127.67,26.08],[127.8,26.1],[127.93,26.33],[128.05,26.5],[128.2,26.72],[128.27,26.87]],
+sado:[[138.52,38.32],[138.25,38.05],[138.3,37.85],[138.55,37.95],[138.55,38.15],[138.52,38.32]],
+awaji:[[134.98,34.58],[134.72,34.25],[134.9,34.25],[135.05,34.55],[134.98,34.58]],
+};
+
+/* ===== アジア大陸・周辺島嶼（台風表示用の背景） [経度, 緯度] ===== */
+const CONTINENT = {
+mainland:[[105.0,8.6],[106.6,9.5],[107.0,10.4],[109.2,11.9],[109.3,13.0],[109.2,14.5],[108.8,15.5],[108.2,16.1],[107.1,17.0],[106.5,17.9],[105.8,18.7],[106.0,19.5],[106.5,20.3],[108.0,21.5],[108.5,21.6],[109.8,21.4],[110.4,21.1],[111.5,21.5],[112.5,21.7],[113.5,22.2],[114.1,22.5],[115.5,22.8],[116.7,23.4],[117.7,24.5],[119.0,25.4],[119.8,26.6],[120.2,27.3],[121.0,28.3],[121.6,29.3],[122.1,30.2],[121.5,31.0],[120.9,32.0],[120.3,33.4],[119.8,34.3],[119.2,35.0],[120.3,36.0],[121.7,37.0],[120.7,37.8],[119.0,37.3],[118.0,38.2],[117.7,38.9],[118.5,39.2],[119.6,39.9],[121.0,40.0],[122.0,39.8],[121.6,38.9],[123.0,39.8],[124.4,40.0],[125.4,39.7],[125.0,38.6],[126.5,37.8],[126.4,36.7],[126.5,35.5],[126.3,34.6],[127.5,34.3],[128.6,34.8],[129.0,35.1],[129.4,35.5],[129.4,36.5],[129.6,37.5],[128.6,38.4],[128.3,38.6],[127.5,39.3],[128.2,40.0],[129.7,40.7],[130.0,42.0],[131.0,42.6],[131.9,43.1],[133.0,43.4],[134.7,43.6],[135.9,44.4],[137.3,45.8],[138.5,47.0],[139.5,48.5],[140.5,50.0],[141.0,51.5]],
+taiwan:[[121.5,25.3],[122.0,25.0],[121.9,24.5],[121.6,24.0],[121.0,22.9],[120.9,21.9],[120.3,22.5],[120.1,23.1],[120.2,24.0],[120.8,24.8],[121.5,25.3]],
+hainan:[[110.2,20.1],[111.0,19.6],[110.6,18.8],[110.0,18.2],[109.2,18.3],[108.6,19.2],[108.8,19.9],[109.5,20.2],[110.2,20.1]],
+luzon:[[120.6,18.5],[121.5,18.5],[122.2,18.3],[122.3,17.3],[121.9,16.4],[122.0,15.2],[121.6,14.5],[122.5,14.2],[121.0,13.8],[120.6,14.0],[120.3,15.0],[119.8,16.3],[120.4,17.6],[120.6,18.5]],
+mindanao:[[125.5,9.8],[126.3,8.5],[126.2,7.3],[125.7,6.9],[125.4,5.6],[124.2,6.2],[123.0,6.9],[122.0,6.9],[121.9,7.7],[123.3,7.9],[124.0,8.9],[125.5,9.8]],
+sakhalin:[[142.1,46.0],[143.4,46.8],[143.0,48.0],[142.2,48.8],[142.6,50.0],[142.2,51.0],[141.8,50.0],[141.9,48.6],[142.1,46.0]],
+amami:[[129.3,28.5],[129.7,28.4],[129.5,28.1],[129.1,28.2],[129.3,28.5]],
+};
+/* 小さな島は点で（石垣・宮古・南大東・屋久・父島・硫黄島・グアム・サイパン・パラオ・ミンドロ） */
+const ISLET_DOTS = [[124.2,24.4],[125.3,24.8],[131.3,25.8],[130.5,30.4],[142.2,27.1],
+                    [141.3,24.8],[144.75,13.45],[145.75,15.2],[134.5,7.5],[121.0,13.0]];
+
+const AREAS = {
+  '北海道':[141.5,43.3,3.0],'東北':[140.6,39.3,3.2],'関東':[139.7,35.9,2.2],
+  '首都圏':[139.7,35.7,1.4],'甲信越':[138.4,36.9,2.2],'北陸':[136.8,36.6,2.2],
+  '東海':[137.5,35.0,2.2],'近畿':[135.4,34.7,2.2],'中国':[132.8,34.7,2.6],
+  '四国':[133.5,33.6,2.2],'九州':[130.7,32.5,3.0],'沖縄':[127.9,26.4,1.2],
+};
+
+const LINE_STYLE = {
+
+  // --- JR東日本 新幹線 ---
+
+  'JR-East.TohokuShinkansen':{code:'',color:'#008000'},
+  'JR-East.JoetsuShinkansen':{code:'',color:'#FF978E'},
+  'JR-East.HokurikuShinkansen':{code:'',color:'#6A3D98'},
+  'JR-East.YamagataShinkansen':{code:'',color:'#______'},
+  'JR-East.AkitaShinkansen':{code:'',color:'#______'},
+  'JR-East.HokkaidoShinkansen':{code:'',color:'#______'},
+
+  // --- 首都圏 ---
+
+  'JR-East.Yamanote':{code:'JY',color:'#80C342'},
+  'JR-East.KeihinTohokuNegishi':{code:'JK',color:'#00B2E5'},
+  'JR-East.ChuoRapid':{code:'JC',color:'#F15A22'},
+  'JR-East.ChuoSobuLocal':{code:'JB',color:'#FFD400'},
+  'JR-East.Chuo':{code:'',color:'#007AC1'},
+  'JR-East.SobuRapid':{code:'JO',color:'#FFD400'},
+  'JR-East.Sobu':{code:'',color:'#FFD400'},
+  'JR-East.Yokosuka':{code:'JO',color:'#007AC1'},
+  'JR-East.Tokaido':{code:'JT',color:'#F68B1E'},
+  'JR-East.Ito':{code:'',color:'#008803'},
+  'JR-East.UenoTokyo':{code:'',color:'#91278F'},
+  'JR-East.ShonanShinjuku':{code:'JS',color:'#E31F26'},
+  'JR-East.SaikyoKawagoe':{code:'JA',color:'#00AC84'},
+  'JR-East.Kawagoe':{code:'',color:'#9FA1A0'},
+  'JR-East.Keiyo':{code:'JE',color:'#C9252F'},
+  'JR-East.Musashino':{code:'JM',color:'#F15A22'},
+  'JR-East.Nambu':{code:'JN',color:'#FFD400'},
+  'JR-East.NambuBranch':{code:'',color:'#______'},
+  'JR-East.Tsurumi':{code:'',color:'#______'},
+  'JR-East.TsurumiOkawaBranch':{code:'',color:'#______'},
+  'JR-East.TsurumiUmiShibauraBranch':{code:'',color:'#______'},
+  'JR-East.Yokohama':{code:'JH',color:'#80C342'},
+  'JR-East.Sagami':{code:'',color:'#009793'},
+  'JR-East.Ome':{code:'',color:'#______'},
+  'JR-East.Itsukaichi':{code:'',color:'#______'},
+  'JR-East.Hachiko':{code:'',color:'#A7A08E'},
+  'JR-East.Takasaki':{code:'JU',color:'#F68B1E'},
+  'JR-East.Utsunomiya':{code:'JU',color:'#F68B1E'},
+  'JR-East.Nikko':{code:'',color:'#880033'},
+  'JR-East.Karasuyama':{code:'',color:'#339966'},
+  'JR-East.Ryomo':{code:'',color:'#FFD400'},
+  'JR-East.Agatsuma':{code:'',color:'#0F5474'},
+  'JR-East.Joetsu':{code:'',color:'#00B3E6'},
+
+  'JR-East.Joban':{code:'',color:'#0071C5'},
+  'JR-East.JobanRapid':{code:'JJ',color:'#36AE6E'},
+  'JR-East.JobanLocal':{code:'JL',color:'#A8A39D'},
+  'JR-East.Mito':{code:'',color:'#______'},
+  'JR-East.Suigun':{code:'',color:'#368C44'},
+  'JR-East.SuigunBranch':{code:'',color:'#368C44'},
+  'JR-East.Kashima':{code:'',color:'#A85F12'},
+  'JR-East.Narita':{code:'',color:'#36AE6E'},
+  'JR-East.NaritaAirportBranch':{code:'',color:'#______'},
+  'JR-East.NaritaAbikoBranch':{code:'',color:'#______'},
+  'JR-East.Uchibo':{code:'',color:'#00B2E5'},
+  'JR-East.Sotobo':{code:'',color:'#E31F26'},
+  'JR-East.Togane':{code:'',color:'#F15F2B'},
+  'JR-East.Kururi':{code:'',color:'#00B5AD'},
+
+  // --- 甲信越・北陸 ---
+
+  'JR-East.Shinetsu':{code:'',color:'#99CC00'},
+  'JR-East.Oito':{code:'',color:'#957490'},
+  'JR-East.Koumi':{code:'',color:'#41934C'},
+  'JR-East.Iiyama':{code:'',color:'#7BC24B'},
+  'JR-East.Echigo':{code:'',color:'#40934D'},
+  'JR-East.Yahiko':{code:'',color:'#922790'},
+  'JR-East.Hakushin':{code:'',color:'#F387B7'},
+  'JR-East.Uetsu':{code:'',color:'#16C0E9'},
+  'JR-East.Yonesaka':{code:'',color:'#9E7EB9'},
+  'JR-East.Banetsusai':{code:'',color:'#CB7B35'},
+  'JR-East.Banetsuto':{code:'',color:'#C71585'},
+  'JR-East.Tadami':{code:'',color:'#008DD1'},
+
+  // --- 東北 ---
+
+  'JR-East.Tohoku':{code:'',color:'#3CB371'},
+  'JR-East.Ou':{code:'',color:'#EE7B28'},
+  'JR-East.Senzan':{code:'',color:'#72BC4A'},
+  'JR-East.Senseki':{code:'',color:'#00AAEE'},
+  'JR-East.SensekiTohoku':{code:'',color:'#______'},
+  'JR-East.Ishinomaki':{code:'',color:'#ED77A4'},
+  'JR-East.Kesennuma':{code:'',color:'#3B459B'},
+  'JR-East.Ofunato':{code:'',color:'#F18E44'},
+  'JR-East.Ohunato':{code:'',color:'#F18E44'},
+  'JR-East.Kitakami':{code:'',color:'#851A72'},
+  'JR-East.Kamaishi':{code:'',color:'#0073BF'},
+  'JR-East.Yamada':{code:'',color:'#CD7A1E'},
+  'JR-East.Hachinohe':{code:'',color:'#E93920'},
+  'JR-East.Hanawa':{code:'',color:'#AA1E30'},
+  'JR-East.Tazawako':{code:'',color:'#9D72B0'},
+  'JR-East.Gono':{code:'',color:'#0C7AAD'},
+  'JR-East.Oga':{code:'',color:'#36823E'},
+  'JR-East.Tsugaru':{code:'',color:'#15A2C4'},
+  'JR-East.RikuuEast':{code:'',color:'#999999'},
+  'JR-East.RikuuWest':{code:'',color:'#6FBF7F'},
+  'JR-East.Aterazawa':{code:'',color:'#0073BF'},
+  'JR-East.Yamagata':{code:'',color:'#______'},
+
+  // --- 東京メトロ・都営 ---
+
+  'TokyoMetro.Ginza':{code:'G',color:'#FF9500'},
+  'TokyoMetro.Marunouchi':{code:'M',color:'#F62E36'},
+  'TokyoMetro.MarunouchiBranch':{code:'Mb',color:'#F62E36'},
+  'TokyoMetro.Hibiya':{code:'H',color:'#B5B5AC'},
+  'TokyoMetro.Tozai':{code:'T',color:'#009BBF'},
+  'TokyoMetro.Chiyoda':{code:'C',color:'#00BB85'},
+  'TokyoMetro.Yurakucho':{code:'Y',color:'#C1A470'},
+  'TokyoMetro.Hanzomon':{code:'Z',color:'#8F76D6'},
+  'TokyoMetro.Namboku':{code:'N',color:'#00AC9B'},
+  'TokyoMetro.Fukutoshin':{code:'F',color:'#9C5E31'},
+
+  'Toei.Asakusa':{code:'A',color:'#E85298'},
+  'Toei.Mita':{code:'I',color:'#0079C2'},
+  'Toei.Shinjuku':{code:'S',color:'#6CBB5A'},
+  'Toei.Oedo':{code:'E',color:'#B6007A'},
+  'Toei.NipporiToneri':{code:'NT',color:'#______'},
+  'Toei.Arakawa':{code:'SA',color:'#______'},
+
+};
+
+
+/* ===== 路線ナンバリング画像の対応表 =====
+ * キー: odpt の路線ID から "odpt.Railway:" を除いたもの
+ * 値  : TrainNum フォルダ内のファイル名（拡張子なし）
+ * ここに無い路線は odpt:lineCode と同名のファイルを探し、
+ * それも無ければ従来の色付きバッジにフォールバックする      */
+const ICON_MAP = {
+  // 東京メトロ
+  'TokyoMetro.Ginza':'G','TokyoMetro.Marunouchi':'M','TokyoMetro.MarunouchiBranch':'M',
+  'TokyoMetro.Hibiya':'H','TokyoMetro.Tozai':'T','TokyoMetro.Chiyoda':'C',
+  'TokyoMetro.Yurakucho':'Y','TokyoMetro.Hanzomon':'Z','TokyoMetro.Namboku':'N',
+  'TokyoMetro.Fukutoshin':'F',
+  // 都営
+  'Toei.Asakusa':'A','Toei.Mita':'I','Toei.Shinjuku':'S','Toei.Oedo':'E',
+  'Toei.NipporiToneri':'NT','Toei.Arakawa':'SA',
+  // 小田急
+  'Odakyu.Odawara':'OH','Odakyu.Tama':'OT','Odakyu.Enoshima':'OE',
+  // 京王
+  'Keio.Keio':'KO','Keio.KeioNew':'KO','Keio.Sagamihara':'KO','Keio.Takao':'KO',
+  'Keio.Dobutsuen':'KO','Keio.Keibajo':'KO','Keio.Inokashira':'IN',
+  // 東急
+  'Tokyu.Toyoko':'TY','Tokyu.Meguro':'MG','Tokyu.DenEnToshi':'DT','Tokyu.Oimachi':'OM',
+  'Tokyu.Ikegami':'IK','Tokyu.TokyuTamagawa':'TM','Tokyu.Setagaya':'SG',
+  'Tokyu.Kodomonokuni':'KD',
+  // 東武
+  'Tobu.TobuSkytree':'TS','Tobu.TobuSkytreeBranch':'TS','Tobu.Kameido':'TS','Tobu.Daishi':'TS',
+  'Tobu.Isesaki':'TI','Tobu.Sano':'TI','Tobu.Koizumi':'TI','Tobu.KoizumiBranch':'TI',
+  'Tobu.Kiryu':'TI','Tobu.Nikko':'TN','Tobu.Utsunomiya':'TN','Tobu.Kinugawa':'TN',
+  'Tobu.UrbanPark':'TD','Tobu.Tojo':'TJ','Tobu.Ogose':'TJ',
+  // 西武
+  'Seibu.Ikebukuro':'SI','Seibu.SeibuChichibu':'SI','Seibu.Toshima':'SI','Seibu.Sayama':'SI',
+  'Seibu.SeibuYurakucho':'SI','Seibu.Shinjuku':'SS','Seibu.Haijima':'SS',
+  'Seibu.Kokubunji':'SK','Seibu.Tamako':'SK','Seibu.Seibuen':'SK',
+  'Seibu.Tamagawa':'ST','Seibu.Yamaguchi':'SY',
+  // 京成・北総・新京成
+  'Keisei.Main':'KS','Keisei.Oshiage':'KS','Keisei.Kanamachi':'KS','Keisei.Chiba':'KS',
+  'Keisei.Chihara':'KS','Keisei.NaritaSkyAccess':'KS','Keisei.HigashiNarita':'KS',
+  'Hokuso.Hokuso':'HS','Shinkeisei.Main':'SL',
+  // その他
+  'Sotetsu.Main':'SO','Sotetsu.Izumino':'SO','Sotetsu.SotetsuShinYokohama':'SO',
+  'YokohamaMinatomiraiRailway.Minatomirai':'MM',
+  'TWR.Rinkai':'R','Yurikamome.Yurikamome':'U',
+  'TokyoMonorail.HanedaAirport':'MO',
+  'ToyoRapidRailway.ToyoRapid':'TR','SaitamaRailway.SaitamaRailway':'SR',
+  'TamaMonorail.TamaMonorail':'TT','Enoshima.Enoshima':'EN',
+};
+
+
+/* ===== 路線名の日本語表記 =====
+ * odpt:railwayTitle が無い / 路線データを取得できない場合の受け皿。
+ * キーは路線IDから "odpt.Railway:" を除いたもの。                       */
+const RAILWAY_JA = {
+  // --- JR東日本 新幹線 ---
+  'JR-East.TohokuShinkansen':'東北新幹線','JR-East.JoetsuShinkansen':'上越新幹線',
+  'JR-East.HokurikuShinkansen':'北陸新幹線','JR-East.YamagataShinkansen':'山形新幹線',
+  'JR-East.AkitaShinkansen':'秋田新幹線','JR-East.HokkaidoShinkansen':'北海道新幹線',
+  // --- 首都圏 ---
+  'JR-East.Yamanote':'山手線','JR-East.KeihinTohokuNegishi':'京浜東北・根岸線',
+  'JR-East.ChuoRapid':'中央線快速','JR-East.ChuoSobuLocal':'中央・総武線各駅停車',
+  'JR-East.Chuo':'中央本線','JR-East.SobuRapid':'総武線快速','JR-East.Sobu':'総武本線',
+  'JR-East.Yokosuka':'横須賀線','JR-East.Tokaido':'東海道線','JR-East.Ito':'伊東線',
+  'JR-East.UenoTokyo':'上野東京ライン','JR-East.ShonanShinjuku':'湘南新宿ライン',
+  'JR-East.SaikyoKawagoe':'埼京線','JR-East.Kawagoe':'川越線',
+  'JR-East.Keiyo':'京葉線','JR-East.Musashino':'武蔵野線',
+  'JR-East.Nambu':'南武線','JR-East.NambuBranch':'南武線（浜川崎支線）',
+  'JR-East.Tsurumi':'鶴見線','JR-East.TsurumiOkawaBranch':'鶴見線（大川支線）',
+  'JR-East.TsurumiUmiShibauraBranch':'鶴見線（海芝浦支線）',
+  'JR-East.Yokohama':'横浜線','JR-East.Sagami':'相模線',
+  'JR-East.Ome':'青梅線','JR-East.Itsukaichi':'五日市線','JR-East.Hachiko':'八高線',
+  'JR-East.Takasaki':'高崎線','JR-East.Utsunomiya':'宇都宮線','JR-East.Nikko':'日光線',
+  'JR-East.Karasuyama':'烏山線','JR-East.Ryomo':'両毛線','JR-East.Agatsuma':'吾妻線',
+  'JR-East.Joetsu':'上越線',
+  'JR-East.Joban':'常磐線','JR-East.JobanRapid':'常磐線快速','JR-East.JobanLocal':'常磐線各駅停車',
+  'JR-East.Mito':'水戸線','JR-East.Suigun':'水郡線','JR-East.SuigunBranch':'水郡線（支線）',
+  'JR-East.Kashima':'鹿島線','JR-East.Narita':'成田線',
+  'JR-East.NaritaAirportBranch':'成田線（空港支線）','JR-East.NaritaAbikoBranch':'成田線（我孫子支線）',
+  'JR-East.Uchibo':'内房線','JR-East.Sotobo':'外房線','JR-East.Togane':'東金線',
+  'JR-East.Kururi':'久留里線',
+  // --- 甲信越・北陸 ---
+  'JR-East.Shinetsu':'信越本線','JR-East.Oito':'大糸線','JR-East.Koumi':'小海線',
+  'JR-East.Iiyama':'飯山線','JR-East.Echigo':'越後線','JR-East.Yahiko':'弥彦線',
+  'JR-East.Hakushin':'白新線','JR-East.Uetsu':'羽越本線','JR-East.Yonesaka':'米坂線',
+  'JR-East.Banetsusai':'磐越西線','JR-East.Banetsuto':'磐越東線','JR-East.Tadami':'只見線',
+  // --- 東北 ---
+  'JR-East.Tohoku':'東北本線','JR-East.Ou':'奥羽本線','JR-East.Senzan':'仙山線',
+  'JR-East.Senseki':'仙石線','JR-East.SensekiTohoku':'仙石東北ライン',
+  'JR-East.Ishinomaki':'石巻線','JR-East.Kesennuma':'気仙沼線',
+  'JR-East.Ofunato':'大船渡線','JR-East.Ohunato':'大船渡線',
+  'JR-East.Kitakami':'北上線','JR-East.Kamaishi':'釜石線','JR-East.Yamada':'山田線',
+  'JR-East.Hachinohe':'八戸線','JR-East.Hanawa':'花輪線','JR-East.Tazawako':'田沢湖線',
+  'JR-East.Gono':'五能線','JR-East.Oga':'男鹿線','JR-East.Tsugaru':'津軽線',
+  'JR-East.RikuuEast':'陸羽東線','JR-East.RikuuWest':'陸羽西線',
+  'JR-East.Aterazawa':'左沢線','JR-East.Yamagata':'山形線',
+  // --- 東京メトロ・都営 ---
+  'TokyoMetro.Ginza':'銀座線','TokyoMetro.Marunouchi':'丸ノ内線',
+  'TokyoMetro.MarunouchiBranch':'丸ノ内線分岐線','TokyoMetro.Hibiya':'日比谷線',
+  'TokyoMetro.Tozai':'東西線','TokyoMetro.Chiyoda':'千代田線',
+  'TokyoMetro.Yurakucho':'有楽町線','TokyoMetro.Hanzomon':'半蔵門線',
+  'TokyoMetro.Namboku':'南北線','TokyoMetro.Fukutoshin':'副都心線',
+  'Toei.Asakusa':'都営浅草線','Toei.Mita':'都営三田線','Toei.Shinjuku':'都営新宿線',
+  'Toei.Oedo':'都営大江戸線','Toei.NipporiToneri':'日暮里・舎人ライナー',
+  'Toei.Arakawa':'都電荒川線',
+};
+
+/* 表に無い路線は、せめて事業者接頭辞を落として読める形にする */
+function railwayName(id, fallbackTitle){
+  if (fallbackTitle) return fallbackTitle;
+  const sfx = suffix(id);
+  if (RAILWAY_JA[sfx]) return RAILWAY_JA[sfx];
+  const tail = sfx.split('.').pop() || sfx;
+  return tail.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+
+/* ===== 事業者のコーポレートカラー =====
+ * 路線固有の色が分からないときのカラーバー用フォールバック  */
+const OPERATOR_COLOR = {
+  'JR-East':'#008803', 'jre-is':'#008803',
+  'JR-Central':'#F77321', 'JR-West':'#0072BC', 'JR-Hokkaido':'#03C13B',
+  'JR-Shikoku':'#00A0E9', 'JR-Kyushu':'#E60012',
+  'TokyoMetro':'#149DD3', 'Toei':'#009944',
+  'Odakyu':'#2288CC', 'Keio':'#DD0077', 'Tokyu':'#E21F26', 'Tobu':'#004097',
+  'Seibu':'#00A0E9', 'Keisei':'#005AAA', 'Keikyu':'#00BFFF', 'Sotetsu':'#0067C0',
+};
+function operatorColor(id){
+  const op = String(id||'').replace(/^odpt\.Railway:/, '').split('.')[0];
+  return OPERATOR_COLOR[op] || null;
+}
+
+/* 路線の表示色（odpt:color → LINE_STYLE → 事業者色 → グレー） */
+function railwayColor(id, apiColor){
+  if (apiColor) return apiColor;
+  const st = LINE_STYLE[suffix(id)];
+  if (st && st.color) return st.color;
+  return operatorColor(id) || '#7f96b8';
+}
+
+const DIRECTION_JA = {
+  InnerLoop:'内回り', OuterLoop:'外回り', Northbound:'北行', Southbound:'南行',
+  Eastbound:'東行', Westbound:'西行', Inbound:'上り', Outbound:'下り',
+  Ascending:'上り', Descending:'下り',
+};
+
+/* ===================== 共通 ===================== */
+const $ = id => document.getElementById(id);
+const stage=$('stage'), panel=$('panel'), wrap=$('mapWrap');
+const canvas=$('map'), ctx=canvas.getContext('2d');
+
+const LAT0 = 37, KX = Math.cos(LAT0 * Math.PI / 180);
+/* Web メルカトル（気象庁タイルと同じ投影。KX 倍して従来と同程度の尺度にする） */
+const R2D = 180 / Math.PI;
+const mercY = lat => R2D * Math.log(Math.tan(Math.PI/4 + Math.max(-85, Math.min(85, lat)) * Math.PI/360));
+const proj = (lon, lat) => [lon * KX, -mercY(lat) * KX];
+const DEG_KM = 111.32;
+/* 緯度 lat 付近での「km → 投影単位」換算 */
+const kmToUnits = (km, lat) => km * KX / (DEG_KM * Math.cos((lat||36) * Math.PI/180));
+
+const JP_PATHS   = Object.values(JAPAN).map(a => a.map(p => proj(p[0], p[1])));
+const CONT_PATHS = Object.values(CONTINENT).map(a => a.map(p => proj(p[0], p[1])));
+const DOT_PTS    = ISLET_DOTS.map(p => proj(p[0], p[1]));
+
+let RAILWAYS=new Map(), STATIONS=new Map(), RAIL_TITLE=new Map();
+let ITEMS=[], TYPHOONS=[], WFRAMES=[];
+let cursor=0, tIdx=0, wIdx=0, SCENE='train';
+let demoMode=false, timer=null;
+let cam=null, camT=null, cssW=0, cssH=0;
+
+const suffix = id => String(id||'').replace(/^odpt\.\w+:/, '');
+const ja = o => (o && o.ja) || (typeof o === 'string' ? o : '');
+
+function bbox(pts){
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for (const [x,y] of pts){ if(x<x0)x0=x; if(y<y0)y0=y; if(x>x1)x1=x; if(y>y1)y1=y; }
+  return {x0,y0,x1,y1};
+}
+function unionBox(a,b){
+  if(!a) return b; if(!b) return a;
+  return {x0:Math.min(a.x0,b.x0), y0:Math.min(a.y0,b.y0),
+          x1:Math.max(a.x1,b.x1), y1:Math.max(a.y1,b.y1)};
+}
+const japanBox = bbox(JP_PATHS.flat());
+
+/* ===== 路線図スタイルの整形 =====
+ * 1) 駅を最小間隔で間引いてノード化（＝ドットを打つ駅）
+ * 2) ノード間を「軸平行 + 45度」の2本に分解して路線図らしい形にする   */
+function thinNodes(sts, minDist){
+  if (sts.length < 3) return sts.slice();
+  const out = [sts[0]];
+  for (let i = 1; i < sts.length - 1; i++){
+    const a = out[out.length-1].xy, b = sts[i].xy;
+    if (Math.hypot(b[0]-a[0], b[1]-a[1]) >= minDist) out.push(sts[i]);
+  }
+  out.push(sts[sts.length-1]);
+  return out.length >= 2 ? out : sts.slice();
+}
+
+function octilinear(nodes){
+  const path = [nodes[0].xy];
+  for (let i = 1; i < nodes.length; i++){
+    const a = path[path.length-1], b = nodes[i].xy;
+    const dx = b[0]-a[0], dy = b[1]-a[1];
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    const sgx = Math.sign(dx), sgy = Math.sign(dy);
+    if (adx - ady > 1e-9)      path.push([a[0] + sgx*(adx-ady), a[1]]);
+    else if (ady - adx > 1e-9) path.push([a[0], a[1] + sgy*(ady-adx)]);
+    path.push(b);
+  }
+  return path;
+}
+
+function buildSchematic(stations){
+  const m = CONFIG.map;
+  if (!m.schematic) return { path: stations.map(s => s.xy), nodes: stations };
+  let len = 0;
+  for (let i = 1; i < stations.length; i++){
+    const a = stations[i-1].xy, b = stations[i].xy;
+    len += Math.hypot(b[0]-a[0], b[1]-a[1]);
+  }
+  const spacing = Math.max(kmToUnits(m.nodeMinKm, 36),
+                           len / Math.max(2, m.nodeTarget));
+  const nodes = thinNodes(stations, spacing);
+  const path = octilinear(nodes);
+  // 各ノードでの進行方向（駅マークを直交させるため）
+  for (const n of nodes){
+    const i = path.indexOf(n.xy);
+    const a = path[i > 0 ? i-1 : 0], b = path[i < path.length-1 ? i+1 : path.length-1];
+    let dx = b[0]-a[0], dy = b[1]-a[1];
+    const d = Math.hypot(dx, dy) || 1;
+    n.dir = [dx/d, dy/d];
+  }
+  return { path, nodes };
+}
+
+
+/* ===== 全国の路線図（背景レイヤー）===== */
+const JP_CITY = {
+'稚内':[141.679,45.417],'旭川':[142.365,43.771],'網走':[144.268,44.021],'釧路':[144.382,42.992],
+'帯広':[143.204,42.918],'札幌':[141.351,43.069],'小樽':[141.000,43.190],'長万部':[140.380,42.510],
+'室蘭':[140.974,42.317],'苫小牧':[141.605,42.636],'函館':[140.726,41.774],'新函館北斗':[140.648,41.905],
+'新青森':[140.691,40.827],'青森':[140.740,40.828],'弘前':[140.464,40.603],'大館':[140.568,40.272],
+'八戸':[141.488,40.512],'盛岡':[141.136,39.702],'大曲':[140.475,39.453],'秋田':[140.125,39.718],
+'一ノ関':[141.117,38.935],'酒田':[139.842,38.908],'新庄':[140.301,38.765],'山形':[140.329,38.240],
+'仙台':[140.882,38.260],'福島':[140.460,37.754],'郡山':[140.388,37.398],'いわき':[140.888,37.063],
+'水戸':[140.476,36.370],'新潟':[139.061,37.912],'長岡':[138.851,37.447],'富山':[137.214,36.701],
+'金沢':[136.648,36.578],'福井':[136.223,36.062],'敦賀':[136.079,35.645],'長野':[138.190,36.643],
+'松本':[137.968,36.234],'塩尻':[137.953,36.101],'甲府':[138.569,35.666],'高崎':[139.012,36.322],
+'宇都宮':[139.898,36.559],'大宮':[139.624,35.906],'東京':[139.767,35.681],'千葉':[140.114,35.613],
+'立川':[139.414,35.698],'新横浜':[139.617,35.507],'横浜':[139.622,35.466],'小田原':[139.155,35.256],
+'熱海':[139.078,35.096],'静岡':[138.388,34.972],'浜松':[137.735,34.704],'豊橋':[137.382,34.763],
+'名古屋':[136.882,35.171],'岐阜':[136.757,35.409],'岐阜羽島':[136.686,35.316],'高山':[137.251,36.144],
+'津':[136.509,34.718],'米原':[136.290,35.315],'京都':[135.758,34.986],'新大阪':[135.500,34.733],
+'大阪':[135.496,34.703],'奈良':[135.821,34.679],'和歌山':[135.190,34.232],'串本':[135.770,33.470],
+'新宮':[135.990,33.730],'神戸':[135.196,34.679],'福知山':[135.122,35.296],'豊岡':[134.825,35.540],
+'姫路':[134.690,34.829],'鳥取':[134.234,35.501],'米子':[133.331,35.428],'松江':[133.048,35.468],
+'出雲市':[132.755,35.360],'浜田':[132.080,34.899],'岡山':[133.918,34.666],'福山':[133.362,34.490],
+'広島':[132.475,34.397],'新山口':[131.397,34.094],'下関':[130.941,33.950],'小倉':[130.882,33.886],
+'博多':[130.420,33.590],'佐賀':[130.299,33.265],'長崎':[129.873,32.753],'熊本':[130.700,32.789],
+'八代':[130.602,32.506],'鹿児島中央':[130.541,31.583],'大分':[131.610,33.236],'宮崎':[131.416,31.913],
+'延岡':[131.665,32.582],'高松':[134.047,34.350],'松山':[132.765,33.839],'宇和島':[132.554,33.224],
+'高知':[133.544,33.567],'徳島':[134.551,34.074],
+'黒磯':[140.047,36.970],'小牛田':[141.199,38.543],'本塩釜':[141.023,38.317],
+'松島海岸':[141.064,38.367],'石巻':[141.302,38.434],'女川':[141.447,38.446],
+'前谷地':[141.210,38.509],'柳津':[141.276,38.610],'気仙沼':[141.570,38.908],
+'盛':[141.708,39.009],'北上':[141.113,39.287],'横手':[140.556,39.310],
+'花巻':[141.116,39.388],'遠野':[141.533,39.329],'釜石':[141.885,39.274],
+'宮古':[141.956,39.641],'久慈':[141.774,40.190],'好摩':[141.173,39.879],
+'田沢湖':[140.730,39.696],'東能代':[140.048,40.213],'深浦':[139.926,40.647],
+'川部':[140.482,40.620],'追分':[140.133,39.810],'男鹿':[139.846,39.889],
+'蟹田':[140.650,41.029],'三厩':[140.418,41.190],'鳴子温泉':[140.728,38.744],
+'余目':[139.850,38.833],'左沢':[140.175,38.375],'米沢':[140.323,37.906],
+'今泉':[140.145,38.067],'坂町':[139.467,38.161],'会津若松':[139.927,37.498],
+'新津':[139.118,37.793],'只見':[139.312,37.348],'小出':[138.956,37.238],
+'原ノ町':[140.960,37.638],'常陸大宮':[140.409,36.543],'小山':[139.802,36.314],
+'下館':[139.982,36.306],'友部':[140.305,36.372],'桐生':[139.332,36.413],
+'渋川':[139.000,36.489],'長野原草津口':[138.611,36.562],'大前':[138.530,36.530],
+'水上':[138.995,36.781],'越後湯沢':[138.809,36.935],'直江津':[138.241,37.178],
+'新発田':[139.423,37.952],'村上':[139.483,38.228],'柏崎':[138.562,37.367],
+'東三条':[138.960,37.644],'弥彦':[138.830,37.708],'豊野':[138.274,36.704],
+'十日町':[138.755,37.133],'越後川口':[138.860,37.279],'南小谷':[137.883,36.766],
+'小淵沢':[138.317,35.868],'小諸':[138.423,36.323],'篠ノ井':[138.140,36.573],
+'横川':[138.680,36.332],'木更津':[139.920,35.382],'館山':[139.869,34.996],
+'安房鴨川':[140.101,35.114],'大原':[140.386,35.250],'大網':[140.321,35.463],
+'成東':[140.409,35.610],'上総亀山':[140.136,35.256],'佐倉':[140.216,35.718],
+'成田':[140.319,35.771],'銚子':[140.829,35.735],'佐原':[140.499,35.889],
+'鹿島神宮':[140.642,35.966],'八日市場':[140.553,35.708],'茅ケ崎':[139.404,35.330],
+'橋本':[139.345,35.594],'高麗川':[139.303,35.901],'青梅':[139.258,35.788],
+'奥多摩':[139.096,35.809],'拝島':[139.348,35.718],'武蔵五日市':[139.221,35.729],
+'宝積寺':[139.943,36.627],'烏山':[140.154,36.656],'日光':[139.618,36.747],
+'川越':[139.482,35.906],'伊東':[139.102,34.966],
+};
+
+const BASE_LINES = [
+ // --- 新幹線・全国の幹線（路線IDなし＝背景としてのみ描画） ---
+ {name:'東海道・山陽新幹線', s:['東京','新横浜','小田原','熱海','静岡','浜松','豊橋','名古屋','岐阜羽島','米原','京都','新大阪','神戸','姫路','岡山','福山','広島','新山口','小倉','博多']},
+ {name:'九州新幹線',   s:['博多','熊本','鹿児島中央']},
+ {name:'北海道新幹線', s:['新青森','新函館北斗']},
+ {name:'函館本線',     s:['函館','長万部','小樽','札幌','旭川']},
+ {name:'室蘭本線',     s:['長万部','室蘭','苫小牧','札幌']},
+ {name:'石北本線',     s:['旭川','網走']},
+ {name:'宗谷本線',     s:['旭川','稚内']},
+ {name:'石勝・根室本線', s:['札幌','帯広','釧路']},
+ {name:'山陽本線',     s:['姫路','岡山','福山','広島','新山口','下関','小倉']},
+ {name:'関西本線',     s:['名古屋','津','奈良','大阪']},
+ {name:'紀勢本線',     s:['津','新宮','串本','和歌山','大阪']},
+ {name:'山陰本線',     s:['京都','福知山','豊岡','鳥取','米子','松江','出雲市','浜田','下関']},
+ {name:'伯備線',       s:['岡山','米子']},
+ {name:'瀬戸大橋線',   s:['岡山','高松']},
+ {name:'予讃線',       s:['高松','松山','宇和島']},
+ {name:'土讃線',       s:['高松','高知']},
+ {name:'高徳線',       s:['高松','徳島']},
+ {name:'鹿児島本線',   s:['博多','熊本','八代','鹿児島中央']},
+ {name:'日豊本線',     s:['小倉','大分','延岡','宮崎','鹿児島中央']},
+ {name:'長崎本線',     s:['博多','佐賀','長崎']},
+ {name:'高山本線',     s:['岐阜','高山','富山']},
+ {name:'東海道本線',   s:['熱海','静岡','浜松','豊橋','名古屋','米原','京都','大阪','神戸','姫路']},
+
+ // --- JR東日本 新幹線 ---
+ {id:'odpt.Railway:JR-East.TohokuShinkansen',   name:'東北新幹線', s:['東京','大宮','宇都宮','郡山','福島','仙台','一ノ関','盛岡','八戸','新青森']},
+ {id:'odpt.Railway:JR-East.JoetsuShinkansen',   name:'上越新幹線', s:['大宮','高崎','越後湯沢','長岡','新潟']},
+ {id:'odpt.Railway:JR-East.HokurikuShinkansen', name:'北陸新幹線', s:['高崎','長野','富山','金沢','福井','敦賀']},
+ {id:'odpt.Railway:JR-East.AkitaShinkansen',    name:'秋田新幹線', s:['盛岡','大曲','秋田']},
+ {id:'odpt.Railway:JR-East.YamagataShinkansen', name:'山形新幹線', s:['福島','米沢','山形','新庄']},
+
+ // --- JR東日本 東北エリア ---
+ {id:'odpt.Railway:JR-East.Tohoku',      name:'東北本線',   s:['東京','大宮','宇都宮','黒磯','郡山','福島','仙台','小牛田','一ノ関','北上','盛岡']},
+ {id:'odpt.Railway:JR-East.Ou',          name:'奥羽本線',   s:['福島','米沢','山形','新庄','大曲','秋田','東能代','大館','弘前','川部','青森']},
+ {id:'odpt.Railway:JR-East.Uetsu',       name:'羽越本線',   s:['新津','新発田','村上','酒田','秋田']},
+ {id:'odpt.Railway:JR-East.Senzan',      name:'仙山線',     s:['仙台','山形']},
+ {id:'odpt.Railway:JR-East.Senseki',     name:'仙石線',     s:['仙台','本塩釜','松島海岸','石巻']},
+ {id:'odpt.Railway:JR-East.Ishinomaki',  name:'石巻線',     s:['小牛田','前谷地','石巻','女川']},
+ {id:'odpt.Railway:JR-East.Kesennuma',   name:'気仙沼線',   s:['前谷地','柳津','気仙沼']},
+ {id:'odpt.Railway:JR-East.Ofunato',     name:'大船渡線',   s:['一ノ関','気仙沼','盛']},
+ {id:'odpt.Railway:JR-East.Kitakami',    name:'北上線',     s:['北上','横手']},
+ {id:'odpt.Railway:JR-East.Kamaishi',    name:'釜石線',     s:['花巻','遠野','釜石']},
+ {id:'odpt.Railway:JR-East.Yamada',      name:'山田線',     s:['盛岡','宮古']},
+ {id:'odpt.Railway:JR-East.Hachinohe',   name:'八戸線',     s:['八戸','久慈']},
+ {id:'odpt.Railway:JR-East.Hanawa',      name:'花輪線',     s:['好摩','大館']},
+ {id:'odpt.Railway:JR-East.Tazawako',    name:'田沢湖線',   s:['盛岡','田沢湖','大曲']},
+ {id:'odpt.Railway:JR-East.Gono',        name:'五能線',     s:['東能代','深浦','川部']},
+ {id:'odpt.Railway:JR-East.Oga',         name:'男鹿線',     s:['追分','男鹿']},
+ {id:'odpt.Railway:JR-East.Tsugaru',     name:'津軽線',     s:['青森','蟹田','三厩']},
+ {id:'odpt.Railway:JR-East.RikuuEast',   name:'陸羽東線',   s:['小牛田','鳴子温泉','新庄']},
+ {id:'odpt.Railway:JR-East.RikuuWest',   name:'陸羽西線',   s:['新庄','余目']},
+ {id:'odpt.Railway:JR-East.Aterazawa',   name:'左沢線',     s:['山形','左沢']},
+ {id:'odpt.Railway:JR-East.Yonesaka',    name:'米坂線',     s:['米沢','今泉','坂町']},
+ {id:'odpt.Railway:JR-East.Banetsusai',  name:'磐越西線',   s:['郡山','会津若松','新津']},
+ {id:'odpt.Railway:JR-East.Banetsuto',   name:'磐越東線',   s:['郡山','いわき']},
+ {id:'odpt.Railway:JR-East.Tadami',      name:'只見線',     s:['会津若松','只見','小出']},
+
+ // --- JR東日本 関東・甲信越 ---
+ {id:'odpt.Railway:JR-East.Joban',       name:'常磐線',     s:['上野','水戸','いわき','原ノ町','仙台']},
+ {id:'odpt.Railway:JR-East.Suigun',      name:'水郡線',     s:['水戸','常陸大宮','郡山']},
+ {id:'odpt.Railway:JR-East.Mito',        name:'水戸線',     s:['小山','下館','友部']},
+ {id:'odpt.Railway:JR-East.Ryomo',       name:'両毛線',     s:['小山','桐生','高崎']},
+ {id:'odpt.Railway:JR-East.Agatsuma',    name:'吾妻線',     s:['渋川','長野原草津口','大前']},
+ {id:'odpt.Railway:JR-East.Joetsu',      name:'上越線',     s:['高崎','水上','越後湯沢','長岡']},
+ {id:'odpt.Railway:JR-East.Shinetsu',    name:'信越本線',   s:['直江津','長岡','新潟']},
+ {id:'odpt.Railway:JR-East.Hakushin',    name:'白新線',     s:['新潟','新発田']},
+ {id:'odpt.Railway:JR-East.Echigo',      name:'越後線',     s:['新潟','柏崎']},
+ {id:'odpt.Railway:JR-East.Yahiko',      name:'弥彦線',     s:['東三条','弥彦']},
+ {id:'odpt.Railway:JR-East.Iiyama',      name:'飯山線',     s:['豊野','十日町','越後川口']},
+ {id:'odpt.Railway:JR-East.Oito',        name:'大糸線',     s:['松本','南小谷']},
+ {id:'odpt.Railway:JR-East.Koumi',       name:'小海線',     s:['小淵沢','小諸']},
+ {id:'odpt.Railway:JR-East.Chuo',        name:'中央本線',   s:['東京','立川','八王子','甲府','塩尻']},
+ {id:'odpt.Railway:JR-East.Shinonoi',    name:'篠ノ井線',   s:['塩尻','松本','篠ノ井']},
+ {id:'odpt.Railway:JR-East.Tokaido',     name:'東海道線',   s:['東京','横浜','小田原','熱海']},
+ {id:'odpt.Railway:JR-East.Ito',         name:'伊東線',     s:['熱海','伊東']},
+ {id:'odpt.Railway:JR-East.Takasaki',    name:'高崎線',     s:['大宮','高崎']},
+ {id:'odpt.Railway:JR-East.Utsunomiya',  name:'宇都宮線',   s:['大宮','宇都宮','黒磯']},
+ {id:'odpt.Railway:JR-East.Nikko',       name:'日光線',     s:['宇都宮','日光']},
+ {id:'odpt.Railway:JR-East.Karasuyama',  name:'烏山線',     s:['宝積寺','烏山']},
+ {id:'odpt.Railway:JR-East.Kawagoe',     name:'川越線',     s:['大宮','川越','高麗川']},
+ {id:'odpt.Railway:JR-East.Hachiko',     name:'八高線',     s:['八王子','高麗川','高崎']},
+ {id:'odpt.Railway:JR-East.Ome',         name:'青梅線',     s:['立川','青梅','奥多摩']},
+ {id:'odpt.Railway:JR-East.Itsukaichi',  name:'五日市線',   s:['拝島','武蔵五日市']},
+ {id:'odpt.Railway:JR-East.Sagami',      name:'相模線',     s:['茅ケ崎','橋本']},
+ {id:'odpt.Railway:JR-East.Sobu',        name:'総武本線',   s:['千葉','佐倉','八日市場','銚子']},
+ {id:'odpt.Railway:JR-East.Narita',      name:'成田線',     s:['佐倉','成田','佐原','銚子']},
+ {id:'odpt.Railway:JR-East.Kashima',     name:'鹿島線',     s:['佐原','鹿島神宮']},
+ {id:'odpt.Railway:JR-East.Uchibo',      name:'内房線',     s:['千葉','木更津','館山','安房鴨川']},
+ {id:'odpt.Railway:JR-East.Sotobo',      name:'外房線',     s:['千葉','大原','安房鴨川']},
+ {id:'odpt.Railway:JR-East.Togane',      name:'東金線',     s:['大網','成東']},
+ {id:'odpt.Railway:JR-East.Kururi',      name:'久留里線',   s:['木更津','上総亀山']},
+];
+
+let BASE_PATHS = [];
+let BASE_BY_ID = new Map();
+function buildBaseMap(){
+  BASE_PATHS = [];
+  BASE_BY_ID = new Map();
+  for (const L of BASE_LINES){
+    const nodes = L.s.filter(n => JP_CITY[n])
+                     .map(n => ({ xy: proj(JP_CITY[n][0], JP_CITY[n][1]), name:n }));
+    if (nodes.length < 2) continue;
+    const path = octilinear(nodes);
+    for (const n of nodes){                      // 駅マークの向き
+      const i = path.indexOf(n.xy);
+      const a = path[i > 0 ? i-1 : 0], b = path[i < path.length-1 ? i+1 : path.length-1];
+      const dx = b[0]-a[0], dy = b[1]-a[1], d = Math.hypot(dx, dy) || 1;
+      n.dir = [dx/d, dy/d];
+    }
+    BASE_PATHS.push(path);
+    if (L.id){
+      const fb = LINE_STYLE[suffix(L.id)] || {};
+      BASE_BY_ID.set(L.id, { id:L.id, title:L.name, code:fb.code || '',
+        color: L.color || railwayColor(L.id),
+        path, nodes, box: bbox(path), isBase: true });
+    }
+  }
+}
+
+/* 角丸でパスをなぞる（screen座標） */
+function roundedPath(scr, r){
+  ctx.beginPath();
+  if (scr.length < 3){ 
+    ctx.moveTo(scr[0][0], scr[0][1]);
+    for (let i=1;i<scr.length;i++) ctx.lineTo(scr[i][0], scr[i][1]);
+    return;
+  }
+  ctx.moveTo(scr[0][0], scr[0][1]);
+  for (let i = 1; i < scr.length - 1; i++){
+    const p = scr[i], q = scr[i+1], o = scr[i-1];
+    const d1 = Math.hypot(p[0]-o[0], p[1]-o[1]);
+    const d2 = Math.hypot(q[0]-p[0], q[1]-p[1]);
+    const rr = Math.max(0, Math.min(r, d1/2, d2/2));
+    ctx.arcTo(p[0], p[1], q[0], q[1], rr);
+  }
+  ctx.lineTo(scr[scr.length-1][0], scr[scr.length-1][1]);
+}
+
+function statusInfo(s){
+  s = s || '';
+  // 「直通運転中止」を先に判定（「運転中止」に誤ってマッチするため）
+  if (/直通運転中止|区間運休|折り返し運転/.test(s)) return {cls:'st-warn',  mark:'!',sev:3};
+  if (/見合わせ|運転中止|運休|不通/.test(s))       return {cls:'st-danger',mark:'✕',sev:4};
+  if (/ダイヤ乱れ/.test(s))                      return {cls:'st-ok',    mark:'○',sev:2};
+  if (/遅延|遅れ/.test(s))                       return {cls:'st-warn',  mark:'△',sev:3};
+  if (/運転再開/.test(s))                        return {cls:'st-ok',    mark:'○',sev:2};
+  return {cls:'st-info',mark:'i',sev:1};
+}
+const isNormal = s => !s || /平常運転|平常どおり|通常どおり/.test(s);
+
+function fmtResume(v){
+  if (!v) return '';
+  const m = String(v).match(/(\d{1,2}):(\d{2})/);
+  if (m) return `${String(m[1]).padStart(2,'0')}:${m[2]}`;
+  const d = new Date(v);
+  if (!isNaN(d)) return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  return String(v);
+}
+function fmtStamp(v, label){
+  const d = v ? new Date(v) : new Date();
+  if (isNaN(d)) return '';
+  return `${label||''}${d.getMonth()+1}/${d.getDate()} `
+       + `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} 現在`;
+}
+function directionLabel(id){
+  if (!id) return '';
+  const k = suffix(id).split('.').pop();
+  if (DIRECTION_JA[k]) return DIRECTION_JA[k];
+  const st = STATIONS.get(id);
+  return st ? st + '方面' : '';
+}
+
+/* ===================== レイアウト ===================== */
+function layout(){
+  const W=innerWidth, H=innerHeight;
+  const portrait = W/H < 1.05;
+  stage.classList.toggle('portrait', portrait);
+  let pw;
+  if (portrait){ pw = W; panel.style.width='100%'; panel.style.height='auto'; }
+  else {
+    pw = Math.max(CONFIG.panelMin, Math.min(W*CONFIG.panelRatio, CONFIG.panelMax));
+    panel.style.width = pw+'px'; panel.style.height='100%';
+  }
+  // 幅と高さの両方から縮尺を決める（1440x380 のような横長でもはみ出さない）
+  const uW = (portrait ? Math.min(pw, 700) : pw) / CONFIG.baseUnit;
+  const uH = H / CONFIG.baseHeight;
+  document.documentElement.style.setProperty('--u', Math.min(uW, uH * (portrait ? 2.2 : 1)));
+
+  requestAnimationFrame(() => {
+    const r = wrap.getBoundingClientRect();
+    cssW = Math.max(1, Math.round(r.width));
+    cssH = Math.max(1, Math.round(r.height));
+    const dpr = Math.min(devicePixelRatio||1, 2);
+    canvas.width = Math.round(cssW*dpr);
+    canvas.height = Math.round(cssH*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    fitStatus(); fitCause();
+    setCameraTarget(true);
+  });
+}
+addEventListener('resize', layout);
+
+/* ===================== カメラ ===================== */
+function fitCamera(box, pad){
+  pad = pad==null ? CONFIG.fitPadding : pad;
+  const bw = Math.max(box.x1-box.x0, 1e-6), bh = Math.max(box.y1-box.y0, 1e-6);
+  const s = Math.min(cssW/bw, cssH/bh) * (1-pad);
+  return { x:(box.x0+box.x1)/2, y:(box.y0+box.y1)/2, s };
+}
+function areaBox(name){
+  const a = AREAS[name]; if(!a) return null;
+  const p = proj(a[0],a[1]), hw = a[2]*KX/2, hh = a[2]/2;
+  return {x0:p[0]-hw, y0:p[1]-hh, x1:p[0]+hw, y1:p[1]+hh};
+}
+function setCameraTarget(snap){
+  if (!cssW) return;
+  const whole = fitCamera(japanBox);
+  let t = whole;
+
+  if (SCENE === 'weather'){
+    t = whole;
+  } else if (SCENE === 'typhoon'){
+    const ty = TYPHOONS[tIdx];
+    if (ty){
+      let b = bbox(ty.track.map(p => p.xy));
+      const pad = kmToUnits(ty.now.stormKm || ty.now.galeKm || 300, ty.now.lat);
+      b = {x0:b.x0-pad, y0:b.y0-pad, x1:b.x1+pad, y1:b.y1+pad};
+      if (CONFIG.typhoon.includeJapan) b = unionBox(b, japanBox);
+      t = fitCamera(b, 0.12);
+    }
+  } else if (CONFIG.mapMode === 'auto'){
+    const it = ITEMS[cursor];
+    const rw = it && (RAILWAYS.get(it.railway) || BASE_BY_ID.get(it.railway));
+    let box = rw ? rw.box : (it && it.area ? areaBox(it.area) : null);
+    if (box){
+      const f = fitCamera(box, 0.30);
+      // 幹線データは駅が粗いので、寄りすぎず周囲の路線網が見える距離で止める
+      const span = (rw && rw.isBase) ? CONFIG.baseMinSpanKm : CONFIG.minSpanKm;
+      const maxS = cssW / kmToUnits(span, 36);
+      t = { x:f.x, y:f.y, s: Math.min(f.s, maxS) };
+    }
+  }
+  camT = t;
+  if (snap || !cam) cam = { ...t };
+  requestDraw();
+}
+
+/* ===================== 描画 ===================== */
+function drawMap(){
+  if (!cam) return;
+  const cs = getComputedStyle(document.documentElement);
+  const V  = k => cs.getPropertyValue(k).trim();
+  ctx.clearRect(0,0,cssW,cssH);
+  ctx.fillStyle = V('--map-bg') || '#dfe4ea';
+  ctx.fillRect(0,0,cssW,cssH);
+
+  const sx = p => (p[0]-cam.x)*cam.s + cssW/2;
+  const sy = p => (p[1]-cam.y)*cam.s + cssH/2;
+  const path = pts => { ctx.beginPath();
+    for (let i=0;i<pts.length;i++){ const x=sx(pts[i]), y=sy(pts[i]);
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); } };
+  const rpx = (km, lat) => kmToUnits(km, lat) * cam.s;
+
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  const lw = Math.max(0.8, Math.min(2.2, cssH/520));
+  const M  = CONFIG.map;
+
+  // 大陸・周辺島嶼（台風表示中のみ）
+  if (SCENE === 'typhoon' && CONFIG.typhoon.showContinent){
+    ctx.strokeStyle = V('--map-cont');
+    ctx.fillStyle   = V('--map-contfill');
+    ctx.lineWidth   = lw * 1.1;
+    for (const pts of CONT_PATHS){
+      const a = pts[0], b = pts[pts.length-1];
+      const closed = Math.abs(a[0]-b[0]) < 1e-9 && Math.abs(a[1]-b[1]) < 1e-9;
+      path(pts);
+      if (closed) ctx.fill();
+      ctx.stroke();
+    }
+    ctx.fillStyle = V('--map-cont');
+    const dr = Math.max(1.2, lw * 1.1);
+    for (const p of DOT_PTS){
+      ctx.beginPath(); ctx.arc(sx(p), sy(p), dr, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  // --- 天気分布予報：タイルの上に海岸線の輪郭だけ重ねる ---
+  if (SCENE === 'weather'){
+    drawWeatherTiles();
+    ctx.strokeStyle = V('--map-coast');
+    ctx.lineWidth = lw * M.coastWidth;
+    for (const pts of JP_PATHS){ path(pts); ctx.closePath(); ctx.stroke(); }
+    ctx.strokeStyle = V('--map-cont');
+    ctx.lineWidth = lw * 1.1;
+    for (const pts of CONT_PATHS){ path(pts); ctx.stroke(); }
+    return;
+  }
+
+  // 海岸線（陸を塗って境界をはっきり出す）
+  const wholeS = Math.min(cssW/(japanBox.x1-japanBox.x0), cssH/(japanBox.y1-japanBox.y0))
+               * (1 - CONFIG.fitPadding);
+  const zr = cam.s / wholeS;
+  const coastA = (SCENE === 'typhoon' || !M.coastFade)
+    ? 1 : Math.max(M.coastMinAlpha, Math.min(1, 2 / zr));
+  ctx.save();
+  ctx.globalAlpha = coastA;
+  ctx.fillStyle = V('--map-land');
+  for (const pts of JP_PATHS){ path(pts); ctx.closePath(); ctx.fill(); }
+  ctx.strokeStyle = V('--map-coast');
+  ctx.lineWidth = lw * M.coastWidth;
+  for (const pts of JP_PATHS){ path(pts); ctx.closePath(); ctx.stroke(); }
+  ctx.restore();
+
+  if (SCENE === 'typhoon'){ drawTyphoon(sx, sy, rpx, lw, cs); return; }
+
+  const activeId = ITEMS[cursor] && ITEMS[cursor].railway;
+  const item = ITEMS[cursor];
+  const act  = RAILWAYS.get(activeId) || BASE_BY_ID.get(activeId);
+  const mapBg   = V('--map-bg');
+  const railCol = V('--map-rail');
+  const nodeCol = V('--map-node');
+  const labelCol= V('--map-label');
+  const labelBg = V('--map-labelbg');
+  const labelBd = V('--map-labelbd');
+  const toScr = pts => pts.map(p => [sx(p), sy(p)]);
+  const R = M.cornerRadius;
+
+  const wBase = lw * 2.4, wCase = lw * 1.6, wCore = lw * 3.4;
+
+  // 駅マーク（進行方向に直交する短いダッシュ）
+  const tick = (n, len, w, color) => {
+    const d = n.dir || [1,0];
+    const nx = -d[1], ny = d[0];
+    const x = sx(n.xy), y = sy(n.xy);
+    if (x < -30 || x > cssW+30 || y < -30 || y > cssH+30) return;
+    ctx.strokeStyle = color; ctx.lineWidth = w;
+    ctx.beginPath();
+    ctx.moveTo(x - nx*len, y - ny*len);
+    ctx.lineTo(x + nx*len, y + ny*len);
+    ctx.stroke();
+  };
+  const dot = (n, r, fill, stroke, w) => {
+    const x = sx(n.xy), y = sy(n.xy);
+    if (x < -30 || x > cssW+30 || y < -30 || y > cssH+30) return;
+    ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  };
+
+  // ---- 全国の幹線ネットワーク（背景） ----
+  const actIsBase = !!(activeId && BASE_BY_ID.has(activeId) && !RAILWAYS.has(activeId));
+  if (M.nationalMap && BASE_PATHS.length && (actIsBase || zr <= M.nationalMaxZoom)){
+    const skip = actIsBase ? BASE_BY_ID.get(activeId).path : null;
+    ctx.strokeStyle = V('--map-base');
+    ctx.lineWidth = Math.max(1.2, lw * 2.0);
+    for (const pts of BASE_PATHS){
+      if (pts === skip) continue;
+      roundedPath(toScr(pts), R); ctx.stroke();
+    }
+  }
+
+  // ---- 通常の路線 ----
+  if (CONFIG.drawRailways && RAILWAYS.size){
+    for (const rw of RAILWAYS.values()){
+      if (rw.id === activeId) continue;
+      const scr = toScr(rw.path);
+      if (M.casing){
+        ctx.strokeStyle = mapBg; ctx.lineWidth = wBase + wCase;
+        roundedPath(scr, R); ctx.stroke();
+      }
+      ctx.strokeStyle = railCol; ctx.lineWidth = wBase;
+      roundedPath(scr, R); ctx.stroke();
+    }
+    if (M.showAllNodes){
+      for (const rw of RAILWAYS.values()){
+        if (rw.id === activeId || !rw.nodes) continue;
+        for (const n of rw.nodes){
+          if (M.ticks) tick(n, wBase * 0.78, Math.max(1.3, lw * 1.1), nodeCol);
+          else dot(n, Math.max(1.6, lw*1.3), nodeCol, railCol, Math.max(1, lw*0.8));
+        }
+      }
+    }
+  }
+
+  // ---- 該当路線 ----
+  if (act){
+    const col = (item && item.color) || act.color;
+    const halo = (M.haloByStatus && item) ? haloColor(item.status, V) : col;
+    const scr = toScr(act.path);
+
+    if (M.glow){
+      ctx.save();
+      ctx.strokeStyle = halo;
+      // 幅の広い半透明バンドで路線図らしい「にじみ」を作る
+      ctx.globalAlpha = 0.20; ctx.lineWidth = wCore * 3.4; roundedPath(scr, R); ctx.stroke();
+      ctx.globalAlpha = 0.32; ctx.lineWidth = wCore * 2.1; roundedPath(scr, R); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.shadowColor = halo; ctx.lineWidth = wCore * 1.15;
+      for (const b of [wCore * 2.6, wCore * 1.3]){
+        ctx.shadowBlur = b; roundedPath(scr, R); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (M.casing){
+      ctx.strokeStyle = mapBg; ctx.lineWidth = wCore + lw * 2.0;
+      roundedPath(scr, R); ctx.stroke();
+    }
+    ctx.strokeStyle = col; ctx.lineWidth = wCore;
+    roundedPath(scr, R); ctx.stroke();
+
+    if (M.showNodes && act.nodes){
+      for (const n of act.nodes){
+        if (M.ticks) tick(n, wCore * 0.68, Math.max(1.4, lw * 1.3), nodeCol);
+        else dot(n, Math.max(2.2, lw*1.9), nodeCol, col, Math.max(1.2, lw*1.1));
+      }
+    }
+  } else if (item && item.area && AREAS[item.area]){
+    const a = AREAS[item.area], p = proj(a[0],a[1]);
+    const x = sx(p), y = sy(p), t = (Date.now()%1800)/1800;
+    const r = Math.max(12, cssH*0.03)*(1+t*1.6);
+    ctx.strokeStyle = item.color || '#ff3b30';
+    ctx.globalAlpha = 1-t; ctx.lineWidth = lw*1.6;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = item.color || '#ff3b30';
+    ctx.beginPath(); ctx.arc(x,y,Math.max(4,cssH*0.008),0,Math.PI*2); ctx.fill();
+  }
+
+  // ---- 駅名（該当路線を優先し、重複と衝突を除く） ----
+  const placed = [];
+  if (M.showLabels && cssW >= M.labelMinWidth && RAILWAYS.size){
+    const jobs = [];
+    if (act) jobs.push({ rw: act, active: true });
+    if (M.showAllLabels){
+      for (const rw of RAILWAYS.values()) if (rw !== act) jobs.push({ rw, active: false });
+    }
+    const fsA = Math.max(11, Math.min(18, cssH * 0.021));
+    const seen = new Set();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+
+    for (const job of jobs){
+      const fs = job.active ? fsA : fsA * 0.86;
+      const off = (job.active ? wCore : wBase) * 0.8 + fs * 0.4;
+      ctx.font = `${job.active ? 700 : 400} ${fs}px "Noto Sans JP",sans-serif`;
+      for (const n of (job.rw.nodes || [])){
+        if (!n.name || seen.has(n.name)) continue;
+        const x = sx(n.xy) + off, y = sy(n.xy);
+        if (x < 0 || x > cssW - 8 || y < 10 || y > cssH - 10) continue;
+        const w = ctx.measureText(n.name).width;
+        if (placed.some(q => Math.abs(q.y-y) < fs*1.15 && x < q.x+q.w+fs*0.35 && q.x < x+w+fs*0.35)) continue;
+        placed.push({ x, y, w });
+        seen.add(n.name);
+        if (job.active && M.boxedLabels){
+          const px = fs*0.40, py = fs*0.32, rr = fs*0.28;
+          ctx.fillStyle = labelBg; ctx.strokeStyle = labelBd; ctx.lineWidth = 1;
+          roundRect(x - px, y - fs/2 - py, w + px*2, fs + py*2, rr);
+          ctx.fill(); ctx.stroke();
+          ctx.fillStyle = labelCol; ctx.fillText(n.name, x, y);
+        } else {
+          ctx.strokeStyle = mapBg; ctx.lineWidth = fs * 0.45;
+          ctx.strokeText(n.name, x, y);
+          ctx.fillStyle = labelCol; ctx.fillText(n.name, x, y);
+        }
+      }
+    }
+  }
+
+  // ---- 路線名チップ（該当路線の終端） ----
+  if (M.lineNameChip && act && act.nodes && act.nodes.length){
+    const fs = Math.max(11, Math.min(19, cssH * 0.023));
+    ctx.font = `700 ${fs}px "Noto Sans JP",sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const title = act.title;
+    const w = ctx.measureText(title).width;
+    const sq = fs * 0.9, gap = fs * 0.4, px = fs * 0.45, py = fs * 0.34;
+    const bw = sq + gap + w + px*2, bh = Math.max(sq, fs) + py*2;
+    // 画面内で駅名と当たらない終端を選ぶ
+    let best = null;
+    for (const n of [act.nodes[0], act.nodes[act.nodes.length-1], act.nodes[(act.nodes.length/2)|0]]){
+      const x = sx(n.xy) + fs*0.9, y = sy(n.xy) - fs*1.6;
+      if (x < 4 || x + bw > cssW - 4 || y - bh/2 < 4 || y + bh/2 > cssH - 4) continue;
+      if (placed.some(q => Math.abs(q.y-y) < bh*0.9 && x < q.x+q.w+8 && q.x < x+bw+8)) continue;
+      best = {x, y}; break;
+    }
+    if (best){
+      ctx.fillStyle = labelBg; ctx.strokeStyle = labelBd; ctx.lineWidth = 1;
+      roundRect(best.x - px, best.y - bh/2, bw, bh, fs*0.3);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = (item && item.color) || act.color;
+      roundRect(best.x, best.y - sq/2, sq, sq, sq*0.22); ctx.fill();
+      ctx.fillStyle = labelCol;
+      ctx.fillText(title, best.x + sq + gap, best.y);
+    }
+  }
+}
+
+function roundRect(x, y, w, h, r){
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x,   y+h, r);
+  ctx.arcTo(x,   y+h, x,   y,   r);
+  ctx.arcTo(x,   y,   x+w, y,   r);
+  ctx.closePath();
+}
+
+/* 運行状況からハローの色を決める */
+function haloColor(status, V){
+  const s = status || '';
+  if (/見合わせ|運転中止|運休|不通/.test(s)) return V('--danger') || '#ff3b30';
+  if (/遅延|遅れ|直通運転中止|区間運休|折り返し/.test(s)) return V('--warn') || '#ffcc00';
+  if (/運転再開/.test(s)) return V('--ok') || '#33d17a';
+  return V('--info') || '#4da3ff';
+}
+
+function drawTyphoon(sx, sy, rpx, lw, cs){
+  const ty = TYPHOONS[tIdx];
+  if (!ty) return;
+  const COL  = cs.getPropertyValue('--typhoon').trim() || '#ff5a5a';
+  const GALE = cs.getPropertyValue('--gale').trim()    || '#ffd24d';
+  const trackCol = cs.getPropertyValue('--map-track').trim() || '#33383f';
+
+  // 予想進路
+  if (CONFIG.typhoon.showForecast && ty.track.length > 1){
+    ctx.save();
+    ctx.setLineDash([lw*5, lw*4]);
+    ctx.strokeStyle = trackCol;
+    ctx.lineWidth = lw*1.6;
+    ctx.beginPath();
+    ty.track.forEach((p,i) => {
+      const x = sx(p.xy), y = sy(p.xy);
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    // 予報円
+    for (const p of ty.track){
+      if (!p.circleKm) continue;
+      const x = sx(p.xy), y = sy(p.xy), r = rpx(p.circleKm, p.lat);
+      ctx.save();
+      ctx.setLineDash([lw*3, lw*3]);
+      ctx.strokeStyle = trackCol;
+      ctx.lineWidth = lw*1.3;
+      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
+      ctx.restore();
+      // 何時間後か
+      if (p.hours){
+        const tf = Math.max(10, cssH*0.022);
+        ctx.font = `600 ${tf}px "Noto Sans JP",sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = cs.getPropertyValue('--map-bg').trim();
+        ctx.lineWidth = tf*0.45;
+        ctx.strokeText(`${p.hours}h`, x, y - r - lw*2);
+        ctx.fillStyle = trackCol;
+        ctx.fillText(`${p.hours}h`, x, y - r - lw*2);
+      }
+    }
+  }
+
+  // 実況の強風域・暴風域
+  const now = ty.now, c = now.xy;
+  const cx = sx(c), cy = sy(c);
+  if (now.galeKm){
+    ctx.fillStyle = 'rgba(255,210,77,.13)';
+    ctx.strokeStyle = 'rgba(255,210,77,.5)'; ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.arc(cx,cy,rpx(now.galeKm, now.lat),0,Math.PI*2);
+    ctx.fill(); ctx.stroke();
+  }
+  if (now.stormKm){
+    ctx.fillStyle = 'rgba(255,90,90,.22)';
+    ctx.strokeStyle = 'rgba(255,90,90,.75)'; ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.arc(cx,cy,rpx(now.stormKm, now.lat),0,Math.PI*2);
+    ctx.fill(); ctx.stroke();
+  }
+
+  // 中心マーク（脈動リング＋×印）
+  const t = (Date.now()%2000)/2000;
+  ctx.save();
+  ctx.strokeStyle = COL; ctx.globalAlpha = 1-t; ctx.lineWidth = lw*2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(10, cssH*0.018)*(1+t*1.8), 0, Math.PI*2);
+  ctx.stroke();
+  ctx.restore();
+
+  const m = Math.max(7, cssH*0.014);
+  ctx.strokeStyle = COL; ctx.lineWidth = lw*2.4;
+  ctx.beginPath();
+  ctx.moveTo(cx-m, cy-m); ctx.lineTo(cx+m, cy+m);
+  ctx.moveTo(cx+m, cy-m); ctx.lineTo(cx-m, cy+m);
+  ctx.stroke();
+}
+
+let dirty = true;
+function requestDraw(){ dirty = true; }
+
+function tick(){
+  if (cam && camT){
+    const e = Math.max(0.02, Math.min(1, CONFIG.cameraEase));
+    const dx = camT.x-cam.x, dy = camT.y-cam.y, ds = camT.s-cam.s;
+    // 残りが十分小さくなったら惰性を切って止める（だらだら動き続けない）
+    if (Math.abs(dx) < 1e-7 && Math.abs(dy) < 1e-7 && Math.abs(ds) < camT.s*1e-4){
+      if (cam.x !== camT.x || cam.y !== camT.y || cam.s !== camT.s){
+        cam = { ...camT }; dirty = true;
+      }
+    } else {
+      cam.x += dx*e; cam.y += dy*e; cam.s += ds*e; dirty = true;
+    }
+  }
+  // 点滅マーカーがある間は描き続ける
+  const it = ITEMS[cursor];
+  if (SCENE === 'typhoon' || (it && !RAILWAYS.get(it.railway))) dirty = true;
+  if (dirty){ drawMap(); dirty = false; }
+  requestAnimationFrame(tick);
+}
+
+/* ===================== ODPT ===================== */
+async function odpt(src, type, params={}){
+  const u = new URL(src.endpoint + type);
+  for (const [k,v] of Object.entries(params)) u.searchParams.set(k,v);
+  u.searchParams.set('acl:consumerKey', src.key);
+  const r = await fetch(u.toString(), {cache:'no-store'});
+  if (!r.ok) throw new Error(`${type} ${r.status}`);
+  return r.json();
+}
+const keyOk = s => s.key && !/^(ACL_CONSUMERKEY|CHALLENGE_ACCESS_TOKEN|)$/.test(s.key);
+
+async function loadGeometry(){
+  const rails=[], coords=new Map();
+  for (const src of CONFIG.sources){
+    if (!keyOk(src)) continue;
+    for (const op of (src.geoOperators||[])){
+      try {
+        const [rws, sts] = await Promise.all([
+          odpt(src,'odpt:Railway',{'odpt:operator':op}),
+          odpt(src,'odpt:Station',{'odpt:operator':op}),
+        ]);
+        rails.push(...rws);
+        for (const rw of rws){                       // 形状の有無に関わらず名前は控えておく
+          const t = ja(rw['odpt:railwayTitle']) || rw['dc:title'];
+          if (t) RAIL_TITLE.set(rw['owl:sameAs'], t);
+        }
+        for (const s of sts){
+          const id = s['owl:sameAs'];
+          if (s['geo:lat']!=null && s['geo:long']!=null)
+            coords.set(id, proj(+s['geo:long'], +s['geo:lat']));
+          const t = ja(s['odpt:stationTitle']) || s['dc:title'];
+          if (t) STATIONS.set(id, t);
+        }
+      } catch(e){ console.warn('geometry', op, e.message); }
+    }
+  }
+  for (const rw of rails){
+    const stations = (rw['odpt:stationOrder']||[]).slice()
+      .sort((a,b)=>(a['odpt:index']||0)-(b['odpt:index']||0))
+      .map(o => {
+        const xy = coords.get(o['odpt:station']);
+        return xy ? { xy, name: STATIONS.get(o['odpt:station']) || '' } : null;
+      }).filter(Boolean);
+    if (stations.length < 2) continue;
+    const id = rw['owl:sameAs'], sfx = suffix(id), fb = LINE_STYLE[sfx]||{};
+    const sch = buildSchematic(stations);
+    RAILWAYS.set(id, {
+      id, title: railwayName(id, ja(rw['odpt:railwayTitle']) || rw['dc:title']),
+      code: rw['odpt:lineCode']||fb.code||'',
+      color: railwayColor(id, rw['odpt:color']),
+      stations, path: sch.path, nodes: sch.nodes, box: bbox(sch.path),
+    });
+  }
+}
+
+async function loadInfo(){
+  const out=[];
+  for (const src of CONFIG.sources){
+    if (!keyOk(src)) continue;
+    for (const op of (src.infoOperators||[])){
+      try {
+        const rows = await odpt(src,'odpt:TrainInformation',{'odpt:operator':op});
+        for (const r of rows){
+          const st = ja(r['odpt:trainInformationStatus']);
+          if (!CONFIG.showNormal && isNormal(st)) continue;
+          const rid = r['odpt:railway'], rw = RAILWAYS.get(rid);
+          const fb = LINE_STYLE[suffix(rid)]||{};
+          out.push({
+            railway:rid,
+            title: railwayName(rid,
+                     ja(r['odpt:railwayTitle']) || (rw && rw.title) || RAIL_TITLE.get(rid)),
+            code:  (rw&&rw.code)||fb.code||'',
+            color: (rw&&rw.color)||fb.color||'#9aa4c0',
+            status: st||'お知らせ',
+            direction: directionLabel(r['odpt:railDirection']),
+            range: ja(r['odpt:trainInformationRange']),
+            area:  ja(r['odpt:trainInformationArea']),
+            cause: ja(r['odpt:trainInformationCause']),
+            text:  ja(r['odpt:trainInformationText']),
+            resume: fmtResume(r['odpt:resumeEstimate']),
+            time:  r['dc:date']||r['odpt:timeOfOrigin']||'',
+          });
+        }
+      } catch(e){ console.warn('info', op, e.message); }
+    }
+  }
+  return out;
+}
+
+/* ===================== 気象庁 台風情報 ===================== */
+const JMA_BASE = 'https://www.jma.go.jp/bosai/typhoon/data/';
+
+function pickPart(p){
+  const pos = p.position && p.position.deg;
+  if (!pos) return null;
+  const speed = p.speed || {};
+  const wind  = p.maximumWind && p.maximumWind.sustained;
+  const gust  = p.maximumWind && p.maximumWind.gust;
+  const km = arr => {
+    if (!arr || !arr.length) return 0;
+    return Math.max(...arr.map(a => (a.range && a.range.km) || 0));
+  };
+  return {
+    label: ja(p.part) || String(p.part||''),
+    hours: p.advancedHours || 0,
+    xy: proj(pos[1], pos[0]),
+    lat: pos[0], lon: pos[1],
+    location: p.location || '',
+    category: ja(p.category) || '',
+    scale: p.scale && p.scale !== '-' ? p.scale : '',
+    intensity: p.intensity && p.intensity !== '-' ? p.intensity : '',
+    pressure: p.pressure || '',
+    course: p.course || '',
+    speed: speed['km/h'] ? speed['km/h']+'km/h' : (ja(speed.note) || ''),
+    wind: wind && wind['m/s'] && wind['m/s'] !== '0' ? wind['m/s'] : '',
+    windNote: (wind && wind.note) || '',
+    gust: gust && gust['m/s'] ? gust['m/s'] : '',
+    stormKm: km(p.stormWarning),
+    galeKm:  km(p.galeWarning),
+    circleKm: (p.probabilityCircleRadius && p.probabilityCircleRadius.km) || 0,
+    valid: (p.validtime && p.validtime.JST) || '',
+  };
+}
+
+function parseSpec(spec){
+  const title = spec.find(p => p.part === 'title');
+  if (!title) return null;
+  const parts = spec.filter(p => p.part && p.part !== 'title').map(pickPart).filter(Boolean);
+  if (!parts.length) return null;
+
+  const now = parts.find(p => /実況/.test(p.label)) || parts[0];
+  const rest = parts.filter(p => p !== now)
+                    .sort((a,b) => a.hours - b.hours);
+  const no = String(title.typhoonNumber || '');
+  return {
+    id: title.tropicalCyclone || no,
+    no,
+    isTyphoon: no.length > 2 ? 1 : 0,
+    heading: no.length > 2 ? `台風${+no.slice(-2)}号` : `熱帯低気圧${no}`,
+    name: title.name ? [title.name.jp, title.name.en].filter(Boolean).join(' / ') : '',
+    issue: (title.issue && title.issue.JST) || '',
+    now, track: [now, ...rest],
+  };
+}
+
+async function loadTyphoons(){
+  if (!CONFIG.typhoon.enabled) return [];
+  try {
+    const list = await (await fetch(JMA_BASE+'targetTc.json', {cache:'no-store'})).json();
+    const cap = CONFIG.typhoon.maxCount;
+    const targets = (cap && cap > 0) ? list.slice(0, cap) : list;   // 0 なら全件
+    const specs = await Promise.all(targets.map(async t => {
+      const id = t.tropicalCyclone;
+      try {
+        const r = await fetch(`${JMA_BASE}${id}/specifications.json`, {cache:'no-store'});
+        return parseSpec(await r.json());
+      } catch(e){ console.warn('typhoon spec', id, e.message); return null; }
+    }));
+    // 台風→熱帯低気圧の順、その中は番号順
+    return specs.filter(Boolean).sort((a,b) =>
+      (b.isTyphoon - a.isTyphoon) || String(a.no).localeCompare(String(b.no)));
+  } catch(e){ console.warn('typhoon list', e.message); return []; }
+}
+
+
+/* ===================== 気象庁 天気分布予報タイル ===================== */
+const TILE_CACHE = new Map();
+function getTile(url){
+  let e = TILE_CACHE.get(url);
+  if (e) return e;
+  e = { img: new Image(), ok:false, bad:false };
+  e.img.crossOrigin = 'anonymous';
+  e.img.onload  = () => { e.ok = true;  requestDraw(); };
+  e.img.onerror = () => { e.bad = true; };
+  e.img.src = url;
+  TILE_CACHE.set(url, e);
+  if (TILE_CACHE.size > 600){                 // 古いものから捨てる
+    const k = TILE_CACHE.keys().next().value;
+    if (k !== url) TILE_CACHE.delete(k);
+  }
+  return e;
+}
+
+function tileUrl(f, z, x, y){
+  const W = CONFIG.weather;
+  return `${W.base}${f.basetime}/none/${f.validtime}/surf/${W.element}/${z}/${x}/${y}.png`;
+}
+
+/* 投影座標 <-> Web メルカトルのタイル座標 */
+const pxToLon   = px => px / KX;
+const pyToMercY = py => -py / KX;
+const lonToPx   = lon => lon * KX;
+const mercYToPy = my => -my * KX;
+
+function drawWeatherTiles(){
+  const f = WFRAMES[wIdx];
+  if (!f) return;
+  const W = CONFIG.weather;
+
+  // 画面上でタイルが約256pxになるズームを選ぶ
+  const nWanted = 360 * KX * cam.s / 256;
+  let z = Math.round(Math.log2(Math.max(1, nWanted)));
+  z = Math.max(W.minZoom, Math.min(W.maxZoom, z));
+  const n = 1 << z;
+
+  // 表示範囲を投影座標 → タイル番号へ
+  const px0 = (0      - cssW/2)/cam.s + cam.x, px1 = (cssW - cssW/2)/cam.s + cam.x;
+  const py0 = (0      - cssH/2)/cam.s + cam.y, py1 = (cssH - cssH/2)/cam.s + cam.y;
+  const tX = px => (pxToLon(px) + 180) / 360 * n;
+  const tY = py => (1 - pyToMercY(py) / 180) / 2 * n;
+
+  const x0 = Math.max(0, Math.floor(tX(px0))), x1 = Math.min(n-1, Math.floor(tX(px1)));
+  const y0 = Math.max(0, Math.floor(tY(py0))), y1 = Math.min(n-1, Math.floor(tY(py1)));
+  if (x1 < x0 || y1 < y0) return;
+  if ((x1-x0+1)*(y1-y0+1) > 260) return;      // 念のための上限
+
+  const sxp = px => (px - cam.x)*cam.s + cssW/2;
+  const syp = py => (py - cam.y)*cam.s + cssH/2;
+
+  ctx.save();
+  ctx.globalAlpha = W.opacity;
+  ctx.imageSmoothingEnabled = true;
+  for (let x = x0; x <= x1; x++){
+    for (let y = y0; y <= y1; y++){
+      const e = getTile(tileUrl(f, z, x, y));
+      if (!e.ok) continue;
+      const L = sxp(lonToPx(x / n * 360 - 180));
+      const R = sxp(lonToPx((x+1) / n * 360 - 180));
+      const T = syp(mercYToPy(180 * (1 - 2 * y / n)));
+      const B = syp(mercYToPy(180 * (1 - 2 * (y+1) / n)));
+      ctx.drawImage(e.img, L, T, Math.ceil(R-L)+1, Math.ceil(B-T)+1);
+    }
+  }
+  ctx.restore();
+}
+
+async function loadWeather(){
+  const W = CONFIG.weather;
+  if (!W.enabled) return [];
+  try {
+    const list = await (await fetch(W.base + 'targetTimes.json', {cache:'no-store'})).json();
+    const now = Date.now();
+    const parse = t => {                       // 'YYYYMMDDhhmmss'（JST）
+      const m = /^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)/.exec(String(t));
+      return m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00+09:00`) : null;
+    };
+    const rows = list.map(r => ({ ...r, vt: parse(r.validtime) }))
+                     .filter(r => r.vt)
+                     .sort((a,b) => a.vt - b.vt);
+    const future = rows.filter(r => r.vt.getTime() >= now - 30*60*1000);
+    const pick = (future.length ? future : rows.slice(-W.steps)).slice(0, W.steps);
+    return pick;
+  } catch(e){ console.warn('wdist', e.message); return []; }
+}
+
+/* ===================== デモ ===================== */
+/* 主要駅の座標 [経度, 緯度] */
+const DEMO_ST = {
+'東京':[139.7671,35.6812],'有楽町':[139.7630,35.6750],'新橋':[139.7583,35.6663],
+'浜松町':[139.7570,35.6553],'田町':[139.7476,35.6457],'品川':[139.7387,35.6285],
+'大崎':[139.7286,35.6197],'五反田':[139.7233,35.6262],'目黒':[139.7157,35.6339],
+'恵比寿':[139.7100,35.6467],'渋谷':[139.7016,35.6580],'原宿':[139.7027,35.6702],
+'代々木':[139.7020,35.6830],'新宿':[139.7004,35.6900],'新大久保':[139.7000,35.7013],
+'高田馬場':[139.7038,35.7128],'目白':[139.7065,35.7212],'池袋':[139.7109,35.7295],
+'大塚':[139.7288,35.7314],'巣鴨':[139.7395,35.7333],'駒込':[139.7468,35.7365],
+'田端':[139.7610,35.7380],'西日暮里':[139.7668,35.7320],'日暮里':[139.7710,35.7280],
+'鶯谷':[139.7788,35.7207],'上野':[139.7770,35.7138],'御徒町':[139.7746,35.7075],
+'秋葉原':[139.7731,35.6984],'神田':[139.7708,35.6918],'御茶ノ水':[139.7650,35.6993],
+'四ツ谷':[139.7305,35.6862],'飯田橋':[139.7448,35.7020],'市ケ谷':[139.7358,35.6917],
+'水道橋':[139.7539,35.7020],'後楽園':[139.7519,35.7071],'大手町':[139.7660,35.6845],
+'日本橋':[139.7742,35.6820],'茅場町':[139.7789,35.6797],'門前仲町':[139.7955,35.6721],
+'東陽町':[139.8175,35.6693],'西船橋':[139.9600,35.7076],'中野':[139.6657,35.7056],
+'三鷹':[139.5604,35.7027],'立川':[139.4139,35.6979],'吉祥寺':[139.5799,35.7031],
+'荻窪':[139.6200,35.7046],'高円寺':[139.6497,35.7053],'赤羽':[139.7208,35.7777],
+'王子':[139.7380,35.7527],'大宮':[139.6238,35.9063],'浦和':[139.6560,35.8586],
+'川口':[139.7178,35.8074],'南浦和':[139.6820,35.8480],'北千住':[139.8050,35.7497],
+'綾瀬':[139.8253,35.7620],'松戸':[139.9000,35.7860],'柏':[139.9700,35.8620],
+'我孫子':[140.0280,35.8760],'取手':[140.0620,35.8940],'川崎':[139.6967,35.5310],
+'横浜':[139.6222,35.4657],'大船':[139.5313,35.3540],'戸塚':[139.5347,35.4023],
+'桜木町':[139.6320,35.4514],'武蔵小杉':[139.6598,35.5763],'登戸':[139.5697,35.6205],
+'西国分寺':[139.4720,35.6997],'八王子':[139.3390,35.6555],'新木場':[139.8270,35.6459],
+'舞浜':[139.8850,35.6355],'海浜幕張':[140.0430,35.6480],'蘇我':[140.1230,35.5880],
+'錦糸町':[139.8140,35.6970],'両国':[139.7930,35.6960],'浅草橋':[139.7860,35.6990],
+'亀戸':[139.8270,35.6970],'新小岩':[139.8580,35.7160],'市川':[139.9070,35.7220],
+'船橋':[139.9850,35.7010],'津田沼':[140.0200,35.6910],'千葉':[140.1140,35.6130],
+'中目黒':[139.6990,35.6444],'蒲田':[139.7160,35.5620],'表参道':[139.7124,35.6652],
+'明治神宮前':[139.7060,35.6700],'六本木':[139.7314,35.6626],'赤坂見附':[139.7370,35.6800],
+'永田町':[139.7410,35.6790],'霞ケ関':[139.7500,35.6733],'銀座':[139.7670,35.6717],
+'日比谷':[139.7590,35.6750],'国会議事堂前':[139.7450,35.6740],'青山一丁目':[139.7240,35.6725],
+'九段下':[139.7515,35.6957],'神保町':[139.7575,35.6959],'本郷三丁目':[139.7590,35.7070],
+'上野御徒町':[139.7735,35.7079],'浅草':[139.7967,35.7118],'押上':[139.8130,35.7100],
+'住吉':[139.8170,35.6900],'月島':[139.7840,35.6650],'豊洲':[139.7960,35.6550],
+'中野坂上':[139.6870,35.6975],'代々木上原':[139.6800,35.6690],'和光市':[139.6060,35.7860],
+'新宿三丁目':[139.7050,35.6905],'赤羽岩淵':[139.7210,35.7900],'西高島平':[139.6270,35.7900],
+'三田':[139.7470,35.6480],'西馬込':[139.7020,35.5850],'本八幡':[139.9280,35.7220],
+'都庁前':[139.6920,35.6900],'大門':[139.7550,35.6560],'春日':[139.7520,35.7080],
+'練馬':[139.6540,35.7370],'光が丘':[139.6320,35.7590],
+};
+
+const DEMO_LINES = [
+ {id:'odpt.Railway:JR-East.Yamanote', title:'山手線', code:'JY', color:'#9ACD32',
+  s:['東京','神田','秋葉原','御徒町','上野','鶯谷','日暮里','西日暮里','田端','駒込','巣鴨','大塚','池袋','目白','高田馬場','新大久保','新宿','代々木','原宿','渋谷','恵比寿','目黒','五反田','大崎','品川','田町','浜松町','新橋','有楽町','東京']},
+ {id:'odpt.Railway:JR-East.ChuoRapid', title:'中央線快速', code:'JC', color:'#F15A22',
+  s:['東京','神田','御茶ノ水','四ツ谷','新宿','中野','高円寺','荻窪','吉祥寺','三鷹','西国分寺','立川','八王子']},
+ {id:'odpt.Railway:JR-East.ChuoSobuLocal', title:'中央・総武線各駅停車', code:'JB', color:'#FFD400',
+  s:['三鷹','吉祥寺','荻窪','高円寺','中野','新宿','市ケ谷','飯田橋','御茶ノ水','秋葉原','浅草橋','両国','錦糸町','亀戸','新小岩','市川','船橋','津田沼','千葉']},
+ {id:'odpt.Railway:JR-East.KeihinTohokuNegishi', title:'京浜東北・根岸線', code:'JK', color:'#00B2E5',
+  s:['大宮','浦和','南浦和','川口','赤羽','王子','田端','西日暮里','日暮里','上野','秋葉原','東京','新橋','品川','蒲田','川崎','横浜','桜木町','大船']},
+ {id:'odpt.Railway:JR-East.JobanRapid', title:'常磐線快速', code:'JJ', color:'#00B2E5',
+  s:['上野','日暮里','北千住','松戸','柏','我孫子','取手']},
+ {id:'odpt.Railway:JR-East.Yokosuka', title:'横須賀線', code:'JO', color:'#0067C0',
+  s:['東京','新橋','品川','武蔵小杉','横浜','戸塚','大船']},
+ {id:'odpt.Railway:JR-East.SobuRapid', title:'総武線快速', code:'JO', color:'#0067C0',
+  s:['東京','錦糸町','新小岩','市川','船橋','津田沼','千葉']},
+ {id:'odpt.Railway:JR-East.Keiyo', title:'京葉線', code:'JE', color:'#C9252F',
+  s:['東京','新木場','舞浜','海浜幕張','蘇我']},
+ {id:'odpt.Railway:JR-East.SaikyoKawagoe', title:'埼京線', code:'JA', color:'#00B48D',
+  s:['大崎','渋谷','新宿','池袋','赤羽','大宮']},
+ {id:'odpt.Railway:JR-East.ShonanShinjuku', title:'湘南新宿ライン', code:'JS', color:'#E21F26',
+  s:['大宮','赤羽','池袋','新宿','渋谷','大崎','武蔵小杉','横浜','戸塚','大船']},
+ {id:'odpt.Railway:JR-East.Tokaido', title:'東海道線', code:'JT', color:'#F68B1E',
+  s:['東京','新橋','品川','川崎','横浜','戸塚','大船']},
+ {id:'odpt.Railway:JR-East.Nambu', title:'南武線', code:'JN', color:'#FFD400',
+  s:['川崎','武蔵小杉','登戸','立川']},
+ {id:'odpt.Railway:TokyoMetro.Ginza', title:'銀座線', code:'G', color:'#FF9500',
+  s:['渋谷','表参道','青山一丁目','赤坂見附','新橋','銀座','日本橋','上野広小路','上野','浅草']},
+ {id:'odpt.Railway:TokyoMetro.Marunouchi', title:'丸ノ内線', code:'M', color:'#F62E36',
+  s:['荻窪','中野坂上','新宿三丁目','新宿','四ツ谷','赤坂見附','国会議事堂前','霞ケ関','銀座','東京','大手町','御茶ノ水','本郷三丁目','後楽園','池袋']},
+ {id:'odpt.Railway:TokyoMetro.Hibiya', title:'日比谷線', code:'H', color:'#B5B5AC',
+  s:['中目黒','恵比寿','六本木','霞ケ関','日比谷','銀座','秋葉原','上野','北千住']},
+ {id:'odpt.Railway:TokyoMetro.Tozai', title:'東西線', code:'T', color:'#009BBF',
+  s:['中野','高田馬場','飯田橋','九段下','大手町','日本橋','茅場町','門前仲町','東陽町','西船橋']},
+ {id:'odpt.Railway:TokyoMetro.Chiyoda', title:'千代田線', code:'C', color:'#00BB85',
+  s:['代々木上原','明治神宮前','表参道','国会議事堂前','霞ケ関','大手町','西日暮里','北千住','綾瀬']},
+ {id:'odpt.Railway:TokyoMetro.Yurakucho', title:'有楽町線', code:'Y', color:'#C1A470',
+  s:['和光市','池袋','飯田橋','市ケ谷','永田町','有楽町','月島','豊洲','新木場']},
+ {id:'odpt.Railway:TokyoMetro.Hanzomon', title:'半蔵門線', code:'Z', color:'#8F76D6',
+  s:['渋谷','表参道','永田町','九段下','大手町','錦糸町','押上']},
+ {id:'odpt.Railway:TokyoMetro.Namboku', title:'南北線', code:'N', color:'#00AC9B',
+  s:['目黒','永田町','飯田橋','後楽園','王子','赤羽岩淵']},
+ {id:'odpt.Railway:TokyoMetro.Fukutoshin', title:'副都心線', code:'F', color:'#9C5E31',
+  s:['和光市','池袋','新宿三丁目','明治神宮前','渋谷']},
+ {id:'odpt.Railway:Toei.Asakusa', title:'浅草線', code:'A', color:'#E85298',
+  s:['西馬込','五反田','三田','新橋','日本橋','浅草','押上']},
+ {id:'odpt.Railway:Toei.Mita', title:'三田線', code:'I', color:'#0079C2',
+  s:['目黒','三田','日比谷','大手町','水道橋','春日','巣鴨','西高島平']},
+ {id:'odpt.Railway:Toei.Shinjuku', title:'新宿線', code:'S', color:'#6CBB5A',
+  s:['新宿','市ケ谷','神保町','住吉','本八幡']},
+ {id:'odpt.Railway:Toei.Oedo', title:'大江戸線', code:'E', color:'#B6007A',
+  s:['光が丘','練馬','都庁前','新宿','六本木','大門','月島','門前仲町','両国','上野御徒町','春日','都庁前']},
+];
+
+function demoGeometry(){
+  for (const d of DEMO_LINES){
+    const stations = d.s.map(n => DEMO_ST[n] ? { xy: proj(DEMO_ST[n][0], DEMO_ST[n][1]), name:n } : null)
+                        .filter(Boolean);
+    if (stations.length < 2) continue;
+    const sch = buildSchematic(stations);
+    RAILWAYS.set(d.id, { id:d.id, title:d.title, code:d.code, color:d.color,
+      stations, path:sch.path, nodes:sch.nodes, box:bbox(sch.path) });
+  }
+}
+
+function demoItems(){
+  return [
+    { railway:'odpt.Railway:JR-East.Yamanote', title:'山手線', code:'JY', color:'#9ACD32',
+      status:'運転見合わせ', direction:'内回り', range:'全線', area:'首都圏',
+      cause:'', text:'人身事故の影響で、内回りは全線で運転を見合わせています。再開は未定です。',
+      resume:'00:00', time:new Date().toISOString() },
+    { railway:'odpt.Railway:JR-East.Ofunato', title:'大船渡線', code:'', color:'#7f96b8',
+      status:'運転見合わせ', direction:'', range:'一ノ関〜気仙沼', area:'東北',
+      cause:'', text:'大雨の影響で、一ノ関〜気仙沼間の運転を見合わせています。',
+      resume:'', time:new Date().toISOString() },
+    { railway:'odpt.Railway:JR-East.Tohoku', title:'東北本線', code:'', color:'#00B2E5',
+      status:'列車遅延', direction:'上り', range:'仙台〜一ノ関', area:'東北',
+      cause:'強風', text:'強風の影響で、一部列車に遅れが出ています。',
+      resume:'', time:new Date().toISOString() },
+    { railway:'odpt.Railway:TokyoMetro.Tozai', title:'東西線', code:'T', color:'#009BBF',
+      status:'直通運転中止', direction:'', range:'', area:'首都圏',
+      cause:'', text:'JR中央・総武線内での輸送障害の影響で、直通運転を中止しています。',
+      resume:'', time:new Date().toISOString() },
+  ];
+}
+function demoTyphoon(){
+  const mk = (lat,lon,label,hours,circle,pressure,wind) => ({
+    label, hours, xy:proj(lon,lat), lat, lon, location:'日本の南',
+    category:'台風', scale:'大型', intensity:'非常に強い', pressure,
+    course:'北北西', speed:'20km/h', wind, windNote:'中心付近', gust:String(wind*1.4|0),
+    stormKm: hours?0:150, galeKm: hours?0:500, circleKm:circle,
+    valid:new Date(Date.now()+hours*3600e3).toISOString(),
+  });
+  const now = mk(28.5,131.0,'実況',0,0,'945',45);
+  const now2 = mk(15.0,140.5,'実況',0,0,'998',18);
+  now2.scale=''; now2.intensity=''; now2.category='台風'; now2.location='マリアナ諸島';
+  now2.galeKm = 220; now2.stormKm = 0;
+  return [{
+    id:'TC2612', no:'2612', isTyphoon:1, heading:'台風12号', name:'デモ / DEMO',
+    issue:new Date().toISOString(), now,
+    track:[now, mk(31.2,132.0,'予報　24時間後',24,90,'950',43),
+                mk(34.0,134.5,'予報　48時間後',48,160,'970',35),
+                mk(37.5,140.0,'予報　72時間後',72,240,'990',25)],
+  },{
+    id:'TC2613', no:'2613', isTyphoon:1, heading:'台風13号', name:'デモ2 / DEMO2',
+    issue:new Date().toISOString(), now:now2,
+    track:[now2, mk(17.5,137.0,'予報　24時間後',24,130,'990',23),
+                 mk(21.0,133.0,'予報　48時間後',48,220,'980',30)],
+  }];
+}
+
+/* ===================== パネル描画 ===================== */
+
+/* 路線に対応するナンバリング画像のURL（無ければ null） */
+const ICON_MISSING = new Set();
+function iconFor(item){
+  const I = CONFIG.icons;
+  if (!I || !I.enabled || !item) return null;
+  const name = ICON_MAP[suffix(item.railway)] || (item.code || '');
+  if (!name || ICON_MISSING.has(name)) return null;
+  return I.base + name + I.ext;
+}
+
+
+/* 左端の路線カラーバー */
+function luminance(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex||'').trim());
+  if (!m) return 0.5;
+  const v = parseInt(m[1], 16);
+  const r = (v>>16&255)/255, g = (v>>8&255)/255, b = (v&255)/255;
+  return 0.2126*r + 0.7152*g + 0.0722*b;
+}
+function setEdgeBar(color, cur, total){
+  const el = $('edgeBar');
+  if (color === false){                    // 鉄道以外のシーンではバーを出さない
+    el.classList.add('hide');
+    panel.classList.add('nobar');
+    return;
+  }
+  el.classList.remove('hide');
+  panel.classList.remove('nobar');
+  const cs = getComputedStyle(document.documentElement);
+  const c  = color || cs.getPropertyValue('--ok').trim() || '#33d17a';
+  el.style.background = c;
+  el.style.setProperty('--bar-fg', luminance(c) > 0.62 ? '#111' : '#fff');
+  $('barCur').textContent = total ? String(cur) : '';
+  $('barTot').textContent = total ? String(total) : '';
+  el.querySelector('.sep').style.display = total ? '' : 'none';
+}
+
+/* 運行状況アイコン */
+const SICON_MISSING = new Set();
+function statusIconFor(status){
+  const S = CONFIG.statusIcons;
+  if (!S || !S.enabled) return null;
+  for (const [re, file] of S.rules){
+    if (re.test(status || '')){
+      const url = S.base + file;
+      return SICON_MISSING.has(url) ? null : url;
+    }
+  }
+  return null;
+}
+
+function setMark(el, status, si){
+  const plain = () => { el.className = 'mark'; el.textContent = si.mark; };
+  const url = statusIconFor(status);
+  if (!url){ plain(); return; }
+  el.className = 'mark icon';
+  el.textContent = '';
+  const img = new Image();
+  img.alt = si.mark;
+  img.onerror = () => { SICON_MISSING.add(url); plain(); };
+  img.src = url;
+  el.appendChild(img);
+}
+
+/* バッジを画像 or 従来の色付き四角で描く */
+function setBadge(el, item){
+  const url = iconFor(item);
+  const code = (item && item.code) || '';
+  const plain = () => {
+    el.className = code ? 'badge' : 'badge empty';
+    el.style.background = (item && item.color) || 'transparent';
+    el.textContent = code;
+  };
+  if (!url){ plain(); return; }
+  el.className = 'badge icon' + (CONFIG.icons.plate ? ' plate' : '');
+  el.style.background = '';
+  el.textContent = '';
+  const img = new Image();
+  img.alt = code;
+  img.onerror = () => {                     // 画像が無ければ従来表示に戻す
+    ICON_MISSING.add(ICON_MAP[suffix(item.railway)] || code);
+    plain();
+  };
+  img.src = url;
+  el.appendChild(img);
+}
+
+function shrinkToFit(el, basePx, minPx, maxW){
+  let size = basePx;
+  el.style.fontSize = size + 'px';
+  while (el.scrollWidth > maxW && size > minPx){ size -= 1; el.style.fontSize = size + 'px'; }
+}
+
+function fitCause(){
+  const el = $('causeText');
+  if (!el || $('cardTrain').classList.contains('hide')) return;
+  el.style.webkitLineClamp = 99;
+  const cs = getComputedStyle(el);
+  const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.45;
+  const pr = panel.getBoundingClientRect();
+  const top = el.getBoundingClientRect().top - pr.top;
+  const foot = panel.querySelector('.footer');
+  const avail = panel.clientHeight - top - (foot ? foot.offsetHeight : 0)
+              - parseFloat(getComputedStyle(panel).paddingBottom) - 4;
+  el.style.webkitLineClamp = Math.max(1, Math.floor(avail / lh));
+}
+
+function fitStatus(){
+  const u = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--u')) || 1;
+  const row = $('statusRow');
+  const avail = row.clientWidth - $('mark').offsetWidth - 14*u - 2;
+  shrinkToFit($('status'), 60*u, 22*u, avail);
+}
+
+function fitLineName(el){
+  const u = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--u'))||1;
+  const max = panel.clientWidth - 2*26*u - 86*u - 16*u;
+  let size = 86*u; el.style.fontSize = size+'px';
+  while (el.scrollWidth > max && size > 20*u){ size -= 2*u; el.style.fontSize = size+'px'; }
+}
+
+const SCENE_TITLE = { train:'鉄道運行情報', typhoon:'台風情報', weather:'天気分布予報' };
+function showCard(which){
+  $('cardTrain').classList.toggle('hide', which!=='train');
+  $('cardTyphoon').classList.toggle('hide', which!=='typhoon');
+  $('cardWx').classList.toggle('hide', which!=='weather');
+  $('pTitle').textContent = SCENE_TITLE[which] || '鉄道運行情報';
+}
+
+const CARD_OF = { train:'cardTrain', typhoon:'cardTyphoon', weather:'cardWx' };
+function fade(fn){
+  const c = $(CARD_OF[SCENE] || 'cardTrain');
+  for (const id of Object.values(CARD_OF)) if (id !== c.id) $(id).classList.add('out');
+  c.classList.add('out');
+  setTimeout(() => { fn(); setCameraTarget(); c.classList.remove('out'); }, 300);
+}
+
+function renderTrain(){
+  SCENE = 'train';
+  fade(() => {
+    showCard('train');
+    const it = ITEMS[cursor];
+    if (!it){
+      $('badge').className='badge empty';
+      $('lineName').textContent='運行情報なし'; fitLineName($('lineName'));
+      $('lineSub').textContent='';
+      $('statusRow').className='status-row st-ok';
+      $('mark').className='mark'; $('mark').textContent='○';
+      $('status').textContent='平常運転';
+      requestAnimationFrame(() => { fitStatus(); fitCause(); });
+      $('resume').className='resume hide'; $('resume').textContent='';
+      $('causeText').textContent='各線とも平常どおり運転しています。';
+      $('stamp').textContent = fmtStamp(null);
+      setMark($('mark'), '平常運転', {mark:'○'});
+      setEdgeBar(null, 0, 0);
+    } else {
+      const si = statusInfo(it.status);
+      setBadge($('badge'), it);
+      $('lineName').textContent = it.title; fitLineName($('lineName'));
+      $('lineSub').textContent = [it.direction, it.range].filter(Boolean).join(' ');
+      $('statusRow').className = 'status-row '+si.cls;
+      setMark($('mark'), it.status, si);
+      $('status').textContent = it.status;
+      requestAnimationFrame(() => { fitStatus(); fitCause(); });
+      $('resume').className = 'resume' + (it.resume ? '' : ' hide');
+      $('resume').textContent = it.resume ? '再開見込 '+it.resume : '';
+      $('causeText').textContent = it.cause || it.text || '―';
+      $('stamp').textContent = fmtStamp(it.time);
+      setEdgeBar(it.color, cursor + 1, ITEMS.length);
+    }
+    $('src').textContent = demoMode ? 'DEMO / 公共交通オープンデータ' : '公共交通オープンデータセンター';
+    renderDots();
+  });
+}
+
+function renderTyphoon(){
+  SCENE = 'typhoon';
+  fade(() => {
+    showCard('typhoon');
+    const ty = TYPHOONS[tIdx]; if (!ty) return;
+    const n = ty.now;
+    $('tyNo').textContent = ty.heading;
+    $('tyName').textContent = ty.name;
+    $('tyGrade').textContent = [n.scale, n.intensity, n.category].filter(Boolean).join(' ');
+    $('tyLoc').textContent = n.location ? n.location + ' を進行中' : '';
+
+    const rows = [];
+    const add = (k,v) => { if (v) rows.push(`<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`); };
+    add('中心気圧', n.pressure ? n.pressure+' hPa' : '');
+    add((n.windNote ? n.windNote+'の' : '')+'最大風速', n.wind ? n.wind+' m/s' : '');
+    add('最大瞬間風速', n.gust ? n.gust+' m/s' : '');
+    add('進行', [n.course, n.speed].filter(Boolean).join(' '));
+    add('中心位置', `北緯${n.lat.toFixed(1)}° 東経${n.lon.toFixed(1)}°`);
+    add('暴風域', n.stormKm ? '半径 '+n.stormKm+' km' : '');
+    add('強風域', n.galeKm  ? '半径 '+n.galeKm +' km' : '');
+    const f24 = ty.track.find(p => p.hours === 24);
+    if (f24) add('24時間後', [f24.location, f24.pressure ? f24.pressure+'hPa' : ''].filter(Boolean).join(' / '));
+    $('tyBody').innerHTML = rows.join('');
+
+    $('src').textContent = '気象庁';
+    $('stamp').textContent = fmtStamp(ty.issue, '発表 ');
+    setEdgeBar(false);
+    renderDots();
+  });
+}
+
+
+function renderWeather(){
+  SCENE = 'weather';
+  fade(() => {
+    showCard('weather');
+    const W = CONFIG.weather, f = WFRAMES[wIdx];
+    if (f){
+      const d = f.vt;
+      const wd = ['日','月','火','水','木','金','土'][d.getDay()];
+      $('wxWhen').textContent = `${d.getHours()}時の天気`;
+      $('wxDate').textContent = `${d.getMonth()+1}月${d.getDate()}日(${wd}) ${String(d.getHours()).padStart(2,'0')}:00 の予想`;
+      $('stamp').textContent = fmtStamp(parseJST(f.basetime), '発表 ');
+    } else {
+      $('wxWhen').textContent = '取得できません';
+      $('wxDate').textContent = '';
+      $('stamp').textContent = '';
+    }
+    $('wxElem').textContent = ELEM_JA[W.element] || '天気';
+    $('wxLegend').innerHTML = W.legend.map(([label, col]) =>
+      `<div class="row"><span class="sw" style="background:${col}"></span>${label}</div>`).join('');
+    $('src').textContent = '気象庁';
+    setEdgeBar(false);
+    renderDots();
+  });
+}
+
+const ELEM_JA = { wm:'天気', temp:'気温', r3:'3時間降水量', s3:'3時間降雪量',
+                  tmax:'日中の最高気温', tmin:'朝の最低気温' };
+function parseJST(t){
+  const m = /^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)/.exec(String(t||''));
+  return m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00+09:00`) : null;
+}
+
+function renderDots(){
+  let n, i;
+  if (SCENE === 'typhoon'){ n = TYPHOONS.length; i = tIdx; }
+  else if (SCENE === 'weather'){ n = WFRAMES.length; i = wIdx; }
+  else { n = Math.max(ITEMS.length, 1); i = cursor; }
+  const sq = SCENE !== 'train' ? ' ty' : '';
+  $('dots').innerHTML = Array.from({length:Math.max(n,1)}, (_,k) =>
+    `<div class="dot${k===i?' on':''}${sq}"></div>`).join('');
+}
+
+/* ===================== シーケンサ ===================== */
+function advance(){
+  const hasTy = CONFIG.typhoon.enabled && TYPHOONS.length > 0;
+  const hasWx = CONFIG.weather.enabled && WFRAMES.length > 0;
+  const toTy = () => { tIdx = 0; renderTyphoon(); };
+  const toWx = () => { wIdx = 0; renderWeather(); };
+  const toTr = () => { cursor = 0; renderTrain(); };
+
+  if (SCENE === 'train'){
+    if (cursor + 1 < ITEMS.length){ cursor++; renderTrain(); return; }
+    if (hasTy) return toTy();
+    if (hasWx) return toWx();
+    toTr();
+  } else if (SCENE === 'typhoon'){
+    if (tIdx + 1 < TYPHOONS.length){ tIdx++; renderTyphoon(); return; }
+    if (hasWx) return toWx();
+    toTr();
+  } else {
+    if (wIdx + 1 < WFRAMES.length){ wIdx++; renderWeather(); return; }
+    toTr();
+  }
+}
+function schedule(){
+  clearTimeout(timer);
+  const sec = SCENE==='typhoon' ? CONFIG.typhoon.showSec
+            : SCENE==='weather' ? CONFIG.weather.showSec
+            : CONFIG.rotateSec;
+  timer = setTimeout(() => { advance(); schedule(); }, sec * 1000);
+}
+
+async function refreshTrain(){
+  try {
+    const items = demoMode ? demoItems() : await loadInfo();
+    items.sort((a,b) => statusInfo(b.status).sev - statusInfo(a.status).sev
+                     || String(b.time).localeCompare(String(a.time)));
+    ITEMS = items;
+    if (cursor >= ITEMS.length) cursor = 0;
+    if (SCENE === 'train') renderTrain();
+  } catch(e){ console.error(e); }
+}
+async function refreshWeather(){
+  WFRAMES = await loadWeather();
+  if (wIdx >= WFRAMES.length) wIdx = 0;
+  if (SCENE === 'weather'){
+    if (!WFRAMES.length){ cursor = 0; renderTrain(); }
+    else renderWeather();
+  }
+}
+
+async function refreshTyphoon(){
+  const list = demoMode ? demoTyphoon() : await loadTyphoons();
+  TYPHOONS = list;
+  if (tIdx >= TYPHOONS.length) tIdx = 0;
+  if (SCENE === 'weather'){
+    t = whole;
+  } else if (SCENE === 'typhoon'){
+    if (!TYPHOONS.length){ cursor = 0; renderTrain(); }
+    else renderTyphoon();
+  }
+}
+
+/* ===================== トークン / ログイン ===================== */
+const STORE_KEY = 'odpt-overlay-tokens';
+
+function readStored(){
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null') || null; }
+  catch(e){ return null; }
+}
+function writeStored(t){
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(t)); } catch(e){ /* file:// 等では無視 */ }
+}
+function clearStored(){
+  try { localStorage.removeItem(STORE_KEY); } catch(e){}
+}
+function applyTokens(t){
+  if (t.key)  CONFIG.sources[0].key = t.key;
+  if (t.ckey) CONFIG.sources[1].key = t.ckey;
+}
+function currentTokens(){
+  return {
+    key:  keyOk(CONFIG.sources[0]) ? CONFIG.sources[0].key  : '',
+    ckey: keyOk(CONFIG.sources[1]) ? CONFIG.sources[1].key : '',
+  };
+}
+
+function showLogin(){
+  const t = currentTokens();
+  $('lgKey').value  = t.key;
+  $('lgCKey').value = t.ckey;
+  $('login').classList.remove('hide');
+  setTimeout(() => $('lgKey').focus(), 50);
+}
+function hideLogin(){ $('login').classList.add('hide'); }
+
+function bindLogin(){
+  $('lgStart').onclick = () => {
+    const t = { key: $('lgKey').value.trim(), ckey: $('lgCKey').value.trim() };
+    if ($('lgSave').checked) writeStored(t); else clearStored();
+    applyTokens(t);
+    hideLogin();
+    boot(false);
+  };
+  $('lgDemo').onclick = () => { hideLogin(); boot(true); };
+  $('login').addEventListener('keydown', e => {
+    if (e.key === 'Enter') $('lgStart').click();
+    if (e.key === 'Escape') $('lgDemo').click();
+  });
+  addEventListener('keydown', e => {
+    if ((e.key === 'k' || e.key === 'K') && $('login').classList.contains('hide')) showLogin();
+  });
+}
+
+/* ===================== 起動 ===================== */
+let booted = false;
+async function boot(forceDemo){
+  demoMode = !!forceDemo || !CONFIG.sources.some(keyOk);
+  RAILWAYS.clear(); STATIONS.clear(); RAIL_TITLE.clear();
+  if (demoMode) demoGeometry(); else await loadGeometry();
+  cursor = 0; tIdx = 0; wIdx = 0; SCENE = 'train';
+  await refreshTrain();
+  await refreshTyphoon();
+  await refreshWeather();
+  if (!booted){
+    booted = true;
+    tick();
+    setInterval(refreshTrain,   CONFIG.refreshSec * 1000);
+    setInterval(refreshTyphoon, CONFIG.typhoon.refreshMin * 60 * 1000);
+    setInterval(refreshWeather, CONFIG.weather.refreshMin * 60 * 1000);
+  }
+  schedule();
+}
+
+(function main(){
+  document.documentElement.classList.toggle('map-dark', CONFIG.map.theme === 'dark');
+  buildBaseMap();
+  layout();
+  bindLogin();
+
+  const q = new URLSearchParams(location.search);
+  const urlT = { key: q.get('key') || '', ckey: q.get('ckey') || '' };
+  if (urlT.key || urlT.ckey) applyTokens(urlT);
+  else { const s = readStored(); if (s) applyTokens(s); }
+
+  if (q.has('demo')){ boot(true); return; }
+  if (CONFIG.sources.some(keyOk)){ boot(false); return; }
+  showLogin();
+})();
+</script>
+</body>
+</html>
